@@ -29,13 +29,13 @@ pwatch is a cryptocurrency futures price monitor & trading system with Hermes Ag
 - **hermes agent**: Reads skills, calls CLI, LLM judgment, learning & review
 
 ### Skills
-- `bitlanglang-cycle` - Market cycle analysis (春夏秋冬 theory)
-- `bitlanglang-scanner` - Symbol scanning (quantitative + agent analysis)
-- `bitlanglang-box` - Box pattern detection (algorithm + agent confirmation)
-- `bitlanglang-signal` - Trading signals (breakout/pullback/reversal)
-- `bitlanglang-position` - Position management (fixed sizing, leverage limits)
-- `bitlanglang-risk` - Risk control (stop-loss, consecutive loss limits)
-- `bitlanglang-review` - Trade review (history, statistics, learning)
+- `kairos-cycle` - Market cycle analysis (春夏秋冬 theory)
+- `kairos-scanner` - Symbol scanning (quantitative + agent analysis)
+- `kairos-box` - Box pattern detection (algorithm + agent confirmation)
+- `kairos-signal` - Trading signals (breakout/pullback/reversal)
+- `kairos-position` - Position management (fixed sizing, leverage limits)
+- `kairos-risk` - Risk control (stop-loss, consecutive loss limits)
+- `kairos-review` - Trade review (history, statistics, learning)
 
 ### CLI Commands
 ```bash

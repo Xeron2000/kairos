@@ -1,22 +1,22 @@
 ---
-name: bitlanglang-scanner
-description: 选币扫描 - 基于Bit浪浪选币策略的标的筛选
+name: kairos-scanner
+description: 选币扫描 - 基于kairos选币策略的标的筛选
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, scanner, bitlanglang]
+    tags: [trading, crypto, scanner, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 选币扫描 - Bit浪浪选币策略
+# 选币扫描 - kairos选币策略
 
 ## 核心概念
 
-Bit浪浪选币公式：
+kairos选币公式：
 ```
 大盘拐点企稳 + 属于次新/热点龙头 + 日线结构完美且上方无压力 + 底层箱体蓄力充分
 ```

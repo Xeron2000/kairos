@@ -1,18 +1,18 @@
 ---
-name: bitlanglang-box
-description: 箱体识别 - 基于Bit浪浪箱体理论的市场结构分析
+name: kairos-box
+description: 箱体识别 - 基于kairos箱体理论的市场结构分析
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, box-pattern, bitlanglang]
+    tags: [trading, crypto, box-pattern, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 箱体识别 - Bit浪浪箱体理论
+# 箱体识别 - kairos箱体理论
 
 ## 核心概念
 

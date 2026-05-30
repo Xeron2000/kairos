@@ -1,22 +1,22 @@
 ---
-name: bitlanglang-signal
-description: 交易信号 - 基于Bit浪浪进场策略的信号生成
+name: kairos-signal
+description: 交易信号 - 基于kairos进场策略的信号生成
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, signal, bitlanglang]
+    tags: [trading, crypto, signal, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 交易信号 - Bit浪浪进场策略
+# 交易信号 - kairos进场策略
 
 ## 核心概念
 
-Bit浪浪进场策略：
+kairos进场策略：
 - **趋势初期**：大级别箱体突破
 - **趋势中期**：利用"分歧"寻找介入机会
 - **小级别精准**：找"拐点"和"回踩企稳"

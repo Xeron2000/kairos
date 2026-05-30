@@ -1,22 +1,22 @@
 ---
-name: bitlanglang-review
-description: 复盘学习 - 基于Bit浪浪复盘方法的交易总结
+name: kairos-review
+description: 复盘学习 - 基于kairos复盘方法的交易总结
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, review, bitlanglang]
+    tags: [trading, crypto, review, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 复盘学习 - Bit浪浪复盘方法
+# 复盘学习 - kairos复盘方法
 
 ## 核心概念
 
-Bit浪浪复盘方法：
+kairos复盘方法：
 - **裸K推演**：逐根回放K线，验证逻辑
 - **逐单剖析**：分析亏损单，分类总结
 - **深挖情绪**：找出深层心态诱因

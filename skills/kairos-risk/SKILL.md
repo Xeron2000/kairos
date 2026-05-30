@@ -1,22 +1,22 @@
 ---
-name: bitlanglang-risk
-description: 风险控制 - 基于Bit浪浪风险控制原则的资金保护
+name: kairos-risk
+description: 风险控制 - 基于kairos风险控制原则的资金保护
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, risk, bitlanglang]
+    tags: [trading, crypto, risk, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 风险控制 - Bit浪浪风险控制原则
+# 风险控制 - kairos风险控制原则
 
 ## 核心概念
 
-Bit浪浪风险控制：
+kairos风险控制：
 - **止损是命**：止损和仓位管理是唯一能保命的防线
 - **严格纪律**：坚决不做逆势单，宁愿踏空绝不摸顶
 - **敬畏市场**：市场永远是对的，始终保持敬畏之心

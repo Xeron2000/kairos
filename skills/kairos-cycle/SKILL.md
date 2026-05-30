@@ -1,22 +1,22 @@
 ---
-name: bitlanglang-cycle
-description: 市场周期判断 - 基于Bit浪浪春夏秋冬理论的市场阶段分析
+name: kairos-cycle
+description: 市场周期判断 - 基于kairos春夏秋冬理论的市场阶段分析
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, market-cycle, bitlanglang]
+    tags: [trading, crypto, market-cycle, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 市场周期判断 - Bit浪浪春夏秋冬理论
+# 市场周期判断 - kairos春夏秋冬理论
 
 ## 核心概念
 
-Bit浪浪将市场分为四个阶段：
+kairos将市场分为四个阶段：
 - **春天**：行情启动期，百花齐放
 - **夏天**：主升浪狂热期，聚焦龙头
 - **秋天**：高位震荡期，补涨行情

@@ -1,22 +1,22 @@
 ---
-name: bitlanglang-position
-description: 仓位管理 - 基于Bit浪浪仓位管理原则的资金管理
+name: kairos-position
+description: 仓位管理 - 基于kairos仓位管理原则的资金管理
 version: 1.0.0
 author: pwatch
 license: MIT
 metadata:
   hermes:
-    tags: [trading, crypto, position, bitlanglang]
+    tags: [trading, crypto, position, kairos]
     category: finance
     requires_toolsets: [code]
     requires_tools: [code_execution]
 ---
 
-# 仓位管理 - Bit浪浪仓位管理原则
+# 仓位管理 - kairos仓位管理原则
 
 ## 核心概念
 
-Bit浪浪仓位管理：
+kairos仓位管理：
 - **固定仓位**：总资金等份划分，每次只用固定金额
 - **低倍杠杆**：BTC≤10倍，山寨≤5倍
 - **严格分仓**：亏损从场外补，盈利提现

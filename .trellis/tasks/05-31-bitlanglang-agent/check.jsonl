@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guidelines overview and checklist"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Module organization rules for new trades/analysis/arbitrage modules"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error handling patterns for trade execution and risk management"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Code quality standards, forbidden patterns, testing requirements"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Logging patterns for trade operations and CLI output"}

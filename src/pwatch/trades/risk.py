@@ -11,12 +11,13 @@ from .position import Position, PositionManager
 class RiskConfig:
     """Risk management configuration."""
     max_position_size_pct: float = 0.33  # Max 33% of capital per position
-    max_total_exposure_pct: float = 0.66  # Max 66% total exposure
-    max_leverage_btc: int = 10  # Max leverage for BTC
+    max_total_exposure_pct: float = 0.66  # Max 66% total exposure (2 positions * 33%)
+    max_leverage_btc: int = 10  # Max leverage for BTC/ETH
     max_leverage_alt: int = 5  # Max leverage for altcoins
     max_drawdown_pct: float = 0.20  # Max 20% drawdown before halt
     max_daily_loss_pct: float = 0.10  # Max 10% daily loss
-    max_consecutive_losses: int = 5  # Max consecutive losses before pause
+    max_consecutive_losses: int = 3  # Max consecutive losses before pause
+    max_open_positions: int = 2  # Max simultaneous positions
     min_risk_reward_ratio: float = 2.0  # Min R:R ratio for entry
 
 
@@ -97,8 +98,8 @@ class RiskManager:
         
         # Check max drawdown (simplified - would need equity tracking)
         # For now, just check if we have too many open positions
-        if len(open_positions) >= 5:  # Max 5 concurrent positions
-            return False, "Max concurrent positions reached (5)"
+        if len(open_positions) >= self.config.max_open_positions:
+            return False, f"Max concurrent positions reached ({self.config.max_open_positions})"
         
         return True, "OK"
     

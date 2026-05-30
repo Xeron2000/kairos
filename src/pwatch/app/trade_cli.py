@@ -583,7 +583,7 @@ def cmd_risk_status(args):
     print(f"  Max Position Size: 33%")
     print(f"  Max Total Exposure: 66%")
     print(f"  Max Daily Loss: 10%")
-    print(f"  Max Consecutive Losses: 5")
+    print(f"  Max Consecutive Losses: 3")
     print(f"  Current Consecutive Losses: 0")
     print()
     

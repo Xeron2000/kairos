@@ -37,10 +37,10 @@ class KairosState:
         self.sr_analyzer = SupportResistance()
         self.last_cycle = None
         self.last_scan = None
-        
+
     def update_cycle(self, cycle):
         self.last_cycle = cycle
-        
+
     def update_scan(self, scan):
         self.last_scan = scan
 
@@ -56,12 +56,12 @@ def get_market_cycle() -> Dict[str, Any]:
     """
     try:
         logger.info("Fetching market cycle data...")
-        
+
         # 使用数据服务获取BTC价格
         btc_price = data_service.get_price("BTC/USDT")
         btc_volume = data_service.get_volume("BTC/USDT")
         btc_funding = data_service.get_funding_rate("BTC/USDT")
-        
+
         # 计算周期阶段（简化逻辑）
         # 实际应该使用CycleDetector
         if btc_price and btc_price > 60000:
@@ -84,7 +84,7 @@ def get_market_cycle() -> Dict[str, Any]:
             btc_change_7d = -3.2
             volatility = 5.8
             volume_trend = "decreasing"
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -136,17 +136,17 @@ def detect_box_pattern(
     """
     try:
         logger.info(f"Detecting box pattern for {symbol}...")
-        
+
         # 获取价格数据
         price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
-        
+
         # 使用BoxDetector分析
         # 这里简化处理，实际应该使用真实数据
         high = price * 1.02  # 假设高点
         low = price * 0.98   # 假设低点
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -210,24 +210,24 @@ def scan_symbols(
     """
     try:
         logger.info(f"Scanning {exchange} for symbols...")
-        
+
         # 获取所有可用的符号
         available_symbols = data_service.get_all_symbols()
-        
+
         candidates = []
         for symbol in available_symbols:
             data = data_service.get_market_data(symbol)
             if data:
                 # 检查是否符合筛选条件
-                if (data.volume_24h >= min_volume and 
+                if (data.volume_24h >= min_volume and
                     data.open_interest >= min_oi):
-                    
+
                     # 计算分数
                     score = 0
                     if formula == "perfect":
                         # 完美公式评分
                         score = 85  # 简化评分
-                    
+
                     candidates.append({
                         "symbol": symbol,
                         "volume_24h": data.volume_24h,
@@ -245,7 +245,7 @@ def scan_symbols(
                         "signal_strength": "medium",
                         "score": score if formula == "perfect" else None
                     })
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -290,12 +290,12 @@ def detect_signal(
     """
     try:
         logger.info(f"Detecting signal for {symbol} using {strategy} strategy...")
-        
+
         # 获取价格数据
         price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
-        
+
         # 根据策略计算信号
         if strategy == "box_breakout":
             entry_price = price
@@ -315,7 +315,7 @@ def detect_signal(
             target1 = price * 1.02
             target2 = price * 1.04
             target3 = price * 1.06
-        
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -373,7 +373,7 @@ def get_position_status() -> Dict[str, Any]:
     """
     try:
         logger.info("Getting position status...")
-        
+
         # Mock response
         return {
             "success": True,
@@ -416,7 +416,7 @@ def get_risk_status() -> Dict[str, Any]:
     """
     try:
         logger.info("Getting risk status...")
-        
+
         # Mock response
         return {
             "success": True,
@@ -455,7 +455,7 @@ def get_trade_history(limit: int = 10) -> Dict[str, Any]:
     """
     try:
         logger.info(f"Getting last {limit} trades...")
-        
+
         # Mock response
         return {
             "success": True,
@@ -505,7 +505,7 @@ def get_statistics(strategy: Optional[str] = None) -> Dict[str, Any]:
     """
     try:
         logger.info("Getting trading statistics...")
-        
+
         # Mock response
         return {
             "success": True,
@@ -576,12 +576,12 @@ def check_pyramiding(
     """
     try:
         logger.info(f"Checking pyramiding conditions for {symbol}...")
-        
+
         # 获取价格数据
         price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
-        
+
         # Mock response
         return {
             "success": True,
@@ -629,12 +629,12 @@ def check_exit_signals(
     """
     try:
         logger.info(f"Checking exit signals for {symbol}...")
-        
+
         # 获取价格数据
         price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
-        
+
         # Mock response
         return {
             "success": True,
@@ -675,10 +675,10 @@ def get_market_sentiment() -> Dict[str, Any]:
     """
     try:
         logger.info("Getting market sentiment...")
-        
+
         # 获取BTC价格来判断市场情绪
         btc_price = data_service.get_price("BTC/USDT")
-        
+
         if btc_price and btc_price > 60000:
             sentiment = "bullish"
             money_effect = "strong"
@@ -687,7 +687,7 @@ def get_market_sentiment() -> Dict[str, Any]:
             sentiment = "bearish"
             money_effect = "weak"
             trend_clarity = "low"
-        
+
         # Mock response
         return {
             "success": True,
@@ -731,7 +731,7 @@ def main():
     print("  - get_market_sentiment: 获取市场氛围")
     print()
     print("Starting server...")
-    
+
     # Run with stdio transport for local integration
     mcp.run(transport="stdio")
 

@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from kairos.analysis.box_pattern import BoxDetector
 from kairos.analysis.cycle import CycleDetector
 from kairos.analysis.support_resistance import SupportResistance
-from kairos.data.simple_service import simple_data_service
+from kairos.data.data_manager import data_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -57,10 +57,10 @@ def get_market_cycle() -> Dict[str, Any]:
     try:
         logger.info("Fetching market cycle data...")
         
-        # 使用简单数据服务获取BTC价格
-        btc_price = simple_data_service.get_price("BTC/USDT")
-        btc_volume = simple_data_service.get_volume("BTC/USDT")
-        btc_funding = simple_data_service.get_funding_rate("BTC/USDT")
+        # 使用数据服务获取BTC价格
+        btc_price = data_service.get_price("BTC/USDT")
+        btc_volume = data_service.get_volume("BTC/USDT")
+        btc_funding = data_service.get_funding_rate("BTC/USDT")
         
         # 计算周期阶段（简化逻辑）
         # 实际应该使用CycleDetector
@@ -138,7 +138,7 @@ def detect_box_pattern(
         logger.info(f"Detecting box pattern for {symbol}...")
         
         # 获取价格数据
-        price = simple_data_service.get_price(symbol)
+        price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
         
@@ -212,11 +212,11 @@ def scan_symbols(
         logger.info(f"Scanning {exchange} for symbols...")
         
         # 获取所有可用的符号
-        available_symbols = simple_data_service.get_all_symbols()
+        available_symbols = data_service.get_all_symbols()
         
         candidates = []
         for symbol in available_symbols:
-            data = simple_data_service.get_market_data(symbol)
+            data = data_service.get_market_data(symbol)
             if data:
                 # 检查是否符合筛选条件
                 if (data.volume_24h >= min_volume and 
@@ -292,7 +292,7 @@ def detect_signal(
         logger.info(f"Detecting signal for {symbol} using {strategy} strategy...")
         
         # 获取价格数据
-        price = simple_data_service.get_price(symbol)
+        price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
         
@@ -349,7 +349,7 @@ def detect_signal(
                 "market_cycle": "spring",
                 "cycle_alignment": True,
                 "btc_correlation": 0.82,
-                "funding_rate": simple_data_service.get_funding_rate(symbol) or 0.012,
+                "funding_rate": data_service.get_funding_rate(symbol) or 0.012,
                 "open_interest_change": "+5.2%"
             },
             "recommendation": {
@@ -385,7 +385,7 @@ def get_position_status() -> Dict[str, Any]:
                     "size_usdt": 10000,
                     "leverage": 5,
                     "entry_price": 67800.0,
-                    "current_price": simple_data_service.get_price("BTC/USDT") or 68500.0,
+                    "current_price": data_service.get_price("BTC/USDT") or 68500.0,
                     "unrealized_pnl_usdt": 515.79,
                     "unrealized_pnl_pct": 5.16,
                     "stop_loss": 67200.0,
@@ -578,7 +578,7 @@ def check_pyramiding(
         logger.info(f"Checking pyramiding conditions for {symbol}...")
         
         # 获取价格数据
-        price = simple_data_service.get_price(symbol)
+        price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
         
@@ -631,7 +631,7 @@ def check_exit_signals(
         logger.info(f"Checking exit signals for {symbol}...")
         
         # 获取价格数据
-        price = simple_data_service.get_price(symbol)
+        price = data_service.get_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
         
@@ -677,7 +677,7 @@ def get_market_sentiment() -> Dict[str, Any]:
         logger.info("Getting market sentiment...")
         
         # 获取BTC价格来判断市场情绪
-        btc_price = simple_data_service.get_price("BTC/USDT")
+        btc_price = data_service.get_price("BTC/USDT")
         
         if btc_price and btc_price > 60000:
             sentiment = "bullish"

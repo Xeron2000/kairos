@@ -104,38 +104,56 @@ logger.error(f"Failed to execute order: {e}")
 
 ## Testing Requirements
 
-### 单元测试覆盖
-- 核心函数：100%覆盖
-- 交易执行：关键路径100%覆盖
-- 错误处理：所有异常路径覆盖
+### Mock 规则
 
-### 测试命名
 ```python
-def test_calculate_position_size_basic():
-    """Test basic position size calculation."""
+# ❌ 错误：无 autospec 的 mock 静默接受任何调用
+from unittest.mock import MagicMock, patch
+ex = MagicMock()
+ex.ws_connectd = True  # 拼写错误不会被发现
+
+# ✅ 正确：使用 autospec=True
+from unittest.mock import patch
+with patch("module.ClassName", autospec=True) as mock:
     ...
 
-def test_calculate_position_size_with_leverage():
-    """Test position size with leverage limit."""
-    ...
+# ❌ 错误：用 MagicMock 替代 AsyncMock
+mock.execute = MagicMock()  # await 行为不正确
+await mock.execute()  # 不会有正确的异步行为
 
-def test_check_position_allowed_daily_loss():
-    """Test daily loss limit check."""
-    ...
+# ✅ 正确：异步方法用 AsyncMock
+from unittest.mock import AsyncMock
+mock.execute = AsyncMock(return_value={"success": True})
 ```
 
-### 测试结构
+### 禁止在源码中使用假数据
+
 ```python
-class TestBoxDetector:
-    """Test box pattern detection."""
-    
-    def test_detect_simple_box(self):
-        """Test detection of simple box pattern."""
-        ...
-    
-    def test_detect_convergence(self):
-        """Test convergence detection."""
-        ...
+# ❌ 错误：硬编码占位数据
+btc_change_30d = 15.2  # 假数据
+volatility = 3.2      # 假数据
+
+# ✅ 正确：从真实数据计算
+result = CycleDetector().detect_phase(
+    btc_prices=ohlcv["closes"],
+    btc_volumes=ohlcv["volumes"],
+)
+btc_change_30d = result.btc_change_30d
+```
+
+### Tautological Tests 避免
+
+```python
+# ❌ 错误：测试 mock 输出的计算
+mock.get_price.return_value = 70000.0
+result = function()
+assert result["high"] == 70000.0 * 1.02  # 只验证 mock 输入的乘法
+
+# ✅ 正确：验证业务逻辑
+mock.get_price.return_value = 70000.0
+result = function()
+assert result["signal_strength"] == "high"
+assert result["confidence"] > 0.5
 ```
 
 ---

@@ -1068,67 +1068,8 @@ export default function trellisExtension(pi: {
     );
     return currentContextKey;
   };
+  // subagent tool removed by patch-trellis — pi-subagents provides it
 
-  pi.registerTool?.({
-    name: "subagent",
-    label: "Subagent",
-    description: "Run a Trellis project sub-agent with active task context.",
-    promptSnippet: SUBAGENT_DISPATCH_PROTOCOL,
-    promptGuidelines: SUBAGENT_DISPATCH_PROTOCOL,
-    parameters: {
-      type: "object",
-      properties: {
-        agent: {
-          type: "string",
-          description:
-            "Agent name, such as trellis-implement or trellis-check.",
-        },
-        prompt: {
-          type: "string",
-          description: "Task prompt for the sub-agent.",
-        },
-        mode: {
-          type: "string",
-          enum: ["single", "parallel", "chain"],
-          description: "Delegation mode.",
-        },
-        prompts: {
-          type: "array",
-          items: { type: "string" },
-          description: "Prompts for parallel or chain mode.",
-        },
-        model: {
-          type: "string",
-          description:
-            "Optional Pi model override for the child sub-agent process.",
-        },
-        thinking: {
-          type: "string",
-          enum: ["off", "minimal", "low", "medium", "high", "xhigh"],
-          description:
-            "Optional Pi thinking level override for the child sub-agent process.",
-        },
-      },
-      required: ["prompt"],
-    },
-    execute: async (
-      _toolCallId: string,
-      input: SubagentInput,
-      _signal?: AbortSignal,
-      _onUpdate?: (partialResult: PiToolResult) => void,
-      ctx?: PiExtensionContext,
-    ): Promise<PiToolResult> => {
-      const contextKey = getContextKey(input, ctx);
-      const output = await runSubagent(projectRoot, input, contextKey, _signal);
-      return {
-        content: [{ type: "text", text: output }],
-        details: {
-          agent: input.agent ?? "trellis-implement",
-          mode: input.mode ?? "single",
-        },
-      };
-    },
-  });
 
   pi.on?.("session_start", (event, ctx) => {
     getContextKey(event, ctx);

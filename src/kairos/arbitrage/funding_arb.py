@@ -1,6 +1,7 @@
 """Funding rate arbitrage execution logic."""
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -12,6 +13,7 @@ from .funding_monitor import FundingOpportunity, FundingRateMonitor
 @dataclass
 class ArbitragePosition:
     """Represents an active arbitrage position."""
+
     id: str
     symbol: str
     long_exchange: str
@@ -33,7 +35,7 @@ class FundingArbitrage:
         config: dict,
         executors: dict[str, TradeExecutor],
         position_manager: PositionManager,
-        funding_monitor: FundingRateMonitor
+        funding_monitor: FundingRateMonitor,
     ):
         self.logger = logging.getLogger("kairos.arbitrage.arb")
         self.config = config
@@ -50,11 +52,7 @@ class FundingArbitrage:
         # Active arbitrage positions
         self.active_positions: dict[str, ArbitragePosition] = {}
 
-    async def evaluate_opportunity(
-        self,
-        opportunity: FundingOpportunity,
-        capital: float
-    ) -> dict:
+    async def evaluate_opportunity(self, opportunity: FundingOpportunity, capital: float) -> dict:
         """Evaluate if an arbitrage opportunity is worth taking."""
         # Check if we already have this symbol
         for arb_pos in self.active_positions.values():
@@ -70,7 +68,10 @@ class FundingArbitrage:
 
         # Check if spread is significant enough
         if opportunity.spread < self.min_spread_pct:
-            return {"should_execute": False, "reason": f"Spread too small ({opportunity.spread:.3f}% < {self.min_spread_pct}%)"}
+            return {
+                "should_execute": False,
+                "reason": f"Spread too small ({opportunity.spread:.3f}% < {self.min_spread_pct}%)",
+            }
 
         # Calculate expected daily profit
         daily_profit_pct = opportunity.estimated_daily_profit_pct
@@ -80,14 +81,11 @@ class FundingArbitrage:
             "position_size": position_size,
             "expected_daily_profit_pct": daily_profit_pct,
             "expected_daily_profit": position_size * daily_profit_pct / 100,
-            "risk_level": "low" if opportunity.spread > 0.1 else "medium"
+            "risk_level": "low" if opportunity.spread > 0.1 else "medium",
         }
 
     async def execute_arbitrage(
-        self,
-        opportunity: FundingOpportunity,
-        capital: float,
-        leverage: int = 2
+        self, opportunity: FundingOpportunity, capital: float, leverage: int = 2
     ) -> Optional[ArbitragePosition]:
         """Execute a funding rate arbitrage."""
         # Evaluate first
@@ -130,7 +128,7 @@ class FundingArbitrage:
                 order_type=OrderType.MARKET,
                 amount=amount,
                 leverage=leverage,
-                position_side=PositionSide.LONG
+                position_side=PositionSide.LONG,
             )
 
             long_result = await long_executor.execute_order(long_order)
@@ -145,18 +143,14 @@ class FundingArbitrage:
                 order_type=OrderType.MARKET,
                 amount=amount,
                 leverage=leverage,
-                position_side=PositionSide.SHORT
+                position_side=PositionSide.SHORT,
             )
 
             short_result = await short_executor.execute_order(short_order)
             if not short_result.success:
                 # Try to close the long position
                 self.logger.error(f"Failed to execute short: {short_result.error}")
-                await long_executor.close_position(
-                    opportunity.symbol,
-                    PositionSide.LONG,
-                    amount
-                )
+                await long_executor.close_position(opportunity.symbol, PositionSide.LONG, amount)
                 return None
 
             # Track positions
@@ -167,7 +161,7 @@ class FundingArbitrage:
                 amount=amount,
                 leverage=leverage,
                 strategy="funding_arb",
-                notes=f"Arb long on {opportunity.exchange_long}"
+                notes=f"Arb long on {opportunity.exchange_long}",
             )
 
             short_pos = self.position_manager.open_position(
@@ -177,7 +171,7 @@ class FundingArbitrage:
                 amount=amount,
                 leverage=leverage,
                 strategy="funding_arb",
-                notes=f"Arb short on {opportunity.exchange_short}"
+                notes=f"Arb short on {opportunity.exchange_short}",
             )
 
             # Create arbitrage position
@@ -190,7 +184,7 @@ class FundingArbitrage:
                 long_position_id=long_pos.id,
                 short_position_id=short_pos.id,
                 entry_spread=opportunity.spread,
-                entry_time=time.time()
+                entry_time=time.time(),
             )
 
             self.active_positions[arb_id] = arb_position
@@ -279,8 +273,8 @@ class FundingArbitrage:
                     "long_exchange": p.long_exchange,
                     "short_exchange": p.short_exchange,
                     "entry_spread": p.entry_spread,
-                    "funding_collected": p.funding_collected
+                    "funding_collected": p.funding_collected,
                 }
                 for p in active
-            ]
+            ],
         }

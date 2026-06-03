@@ -1,6 +1,9 @@
 """
 Kairos MCP Server
 Model Context Protocol server for Kairos trading analysis.
+
+Uses real analysis modules (CycleDetector, BoxDetector, SupportResistance)
+and live exchange data via ccxt REST API when available.
 """
 
 import logging
@@ -9,7 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-# Add parent directory to path for imports
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp.server.fastmcp import FastMCP
@@ -17,20 +21,84 @@ from mcp.server.fastmcp import FastMCP
 from kairos.analysis.box_pattern import BoxDetector
 from kairos.analysis.cycle import CycleDetector
 from kairos.analysis.support_resistance import SupportResistance
-from kairos.data.data_manager import data_service
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kairos-mcp")
 
-# Initialize MCP server
 mcp = FastMCP(
     name="Kairos",
-    json_response=True
+    json_response=True,
 )
 
-# Global state
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _get_exchange(exchange_name: str = "okx"):
+    """Lazy exchange instance for REST API calls."""
+    try:
+        from kairos.utils.get_exchange import get_exchange
+
+        return get_exchange(exchange_name)
+    except Exception as e:
+        logger.debug("Cannot create exchange: %s", e)
+        return None
+
+
+def _fetch_ohlcv(symbol: str, timeframe: str = "1d", limit: int = 100, exchange_name: str = "okx") -> Optional[dict]:
+    """Fetch OHLCV data from exchange via REST API."""
+    try:
+        ex = _get_exchange(exchange_name)
+        if not ex:
+            return None
+        ohlcv = ex.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        if not ohlcv:
+            return None
+        data = np.array(ohlcv, dtype=float)
+        return {
+            "timestamps": data[:, 0],
+            "opens": data[:, 1],
+            "highs": data[:, 2],
+            "lows": data[:, 3],
+            "closes": data[:, 4],
+            "volumes": data[:, 5],
+        }
+    except Exception as e:
+        logger.debug("Failed to fetch OHLCV for %s: %s", symbol, e)
+        return None
+
+
+def _current_price(symbol: str, exchange_name: str = "okx") -> Optional[float]:
+    """Get current ticker price."""
+    try:
+        ex = _get_exchange(exchange_name)
+        if not ex:
+            return None
+        ticker = ex.exchange.fetch_ticker(symbol)
+        return ticker.get("last") or ticker.get("close")
+    except Exception as e:
+        logger.debug("Failed to fetch price for %s: %s", symbol, e)
+        return None
+
+
+def _funding_rate(symbol: str, exchange_name: str = "okx") -> Optional[float]:
+    """Get current funding rate."""
+    try:
+        ex = _get_exchange(exchange_name)
+        if not ex:
+            return None
+        info = ex.exchange.fetch_funding_rate(symbol)
+        return info.get("fundingRate") or info.get("info", {}).get("fundingRate")
+    except Exception:
+        return None
+
+
+# ── State ──────────────────────────────────────────────────────────────────
+
+
 class KairosState:
+    """Keeps shared analysis state across MCP calls."""
+
     def __init__(self):
         self.cycle_detector = CycleDetector()
         self.box_detector = BoxDetector()
@@ -44,108 +112,120 @@ class KairosState:
     def update_scan(self, scan):
         self.last_scan = scan
 
+
 state = KairosState()
+
+
+# ── MCP Tools ───────────────────────────────────────────────────────────────
+
 
 @mcp.tool()
 def get_market_cycle() -> Dict[str, Any]:
-    """
-    Get current market cycle phase based on Bit浪浪's spring/summer/autumn/winter theory.
-    
-    Returns:
-        Dictionary with market cycle analysis including phase, confidence, and indicators.
-    """
+    """Get current market cycle phase based on Bit浪浪's spring/summer/autumn/winter theory."""
     try:
         logger.info("Fetching market cycle data...")
+        ohlcv = _fetch_ohlcv("BTC/USDT", "1d", 100)
 
-        # 使用数据服务获取BTC价格
-        btc_price = data_service.get_price("BTC/USDT")
-        btc_volume = data_service.get_volume("BTC/USDT")
-        btc_funding = data_service.get_funding_rate("BTC/USDT")
+        if not ohlcv:
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "cycle": {
+                    "phase": "unknown",
+                    "confidence": 0.0,
+                    "description": "数据获取失败，无法判断周期",
+                    "position_advice": "等待数据恢复",
+                    "indicators": {},
+                },
+                "recommendations": ["等待数据恢复后重新分析"],
+            }
 
-        # 计算周期阶段（简化逻辑）
-        # 实际应该使用CycleDetector
-        if btc_price and btc_price > 60000:
-            phase = "spring"
-            confidence = 0.75
-            description = "行情启动期，百花齐放，开始试仓"
-            position_advice = "开始建仓，正常杠杆"
-            btc_trend = "up"
-            btc_change_30d = 15.2
-            btc_change_7d = 5.8
-            volatility = 3.2
-            volume_trend = "increasing"
-        else:
-            phase = "winter"
-            confidence = 0.6
-            description = "下跌震荡期，空仓冬眠，管住手"
-            position_advice = "空仓等待，无杠杆"
-            btc_trend = "down"
-            btc_change_30d = -10.5
-            btc_change_7d = -3.2
-            volatility = 5.8
-            volume_trend = "decreasing"
+        result = state.cycle_detector.detect_phase(
+            btc_prices=ohlcv["closes"],
+            btc_volumes=ohlcv["volumes"],
+        )
+
+        # Cache cycle
+        state.update_cycle(result)
+
+        phase = result.phase.value
+        is_spring = phase == "spring"
 
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "cycle": {
                 "phase": phase,
-                "confidence": confidence,
-                "description": description,
-                "position_advice": position_advice,
+                "confidence": result.confidence,
+                "description": result.description,
+                "position_advice": result.position_advice,
                 "indicators": {
-                    "btc_trend": btc_trend,
-                    "btc_change_30d": btc_change_30d,
-                    "btc_change_7d": btc_change_7d,
-                    "volatility": volatility,
-                    "volume_trend": volume_trend,
-                    "funding_rates_avg": btc_funding or 0.012,
-                    "btc_price": btc_price
-                }
+                    "btc_trend": result.btc_trend,
+                    "btc_change_30d": result.btc_change_30d,
+                    "btc_change_7d": result.btc_change_7d,
+                    "volatility": result.volatility,
+                    "volume_trend": result.volume_trend,
+                    "funding_rates_avg": result.funding_rates_avg,
+                    "btc_price": float(ohlcv["closes"][-1]),
+                },
             },
             "recommendations": [
                 "积极寻找右侧跟随大盘突破的机会",
                 "建立底仓，准备迎接主升浪",
-                "聚焦龙头币和次新币"
-            ] if phase == "spring" else [
+                "聚焦龙头币和次新币",
+            ]
+            if is_spring
+            else [
                 "空仓等待，管住手",
                 "耐心等待下一个春天",
-                "不要妄想在震荡行情中多空双吃"
-            ]
+                "不要妄想在震荡行情中多空双吃",
+            ],
         }
     except Exception as e:
         logger.error(f"Error getting market cycle: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def detect_box_pattern(
     symbol: str,
     timeframe: str = "15m",
-    lookback: int = 100
+    lookback: int = 100,
 ) -> Dict[str, Any]:
-    """
-    Detect box pattern for a symbol.
-    
-    Args:
-        symbol: Trading symbol (e.g., "BTC/USDT")
-        timeframe: Timeframe for analysis (1m, 5m, 15m, 1h, 4h, 1d)
-        lookback: Number of bars to look back
-        
-    Returns:
-        Box pattern analysis with status and trading implications.
-    """
+    """Detect box pattern for a symbol using BoxDetector."""
     try:
         logger.info(f"Detecting box pattern for {symbol}...")
+        ohlcv = _fetch_ohlcv(symbol, timeframe, lookback)
 
-        # 获取价格数据
-        price = data_service.get_price(symbol)
-        if not price:
-            return {"success": False, "error": f"No data for {symbol}"}
+        if not ohlcv or len(ohlcv["closes"]) < 10:
+            return {"success": False, "error": f"No OHLCV data for {symbol}"}
 
-        # 使用BoxDetector分析
-        # 这里简化处理，实际应该使用真实数据
-        high = price * 1.02  # 假设高点
-        low = price * 0.98   # 假设低点
+        boxes = state.box_detector.detect(
+            symbol=symbol,
+            timeframe=timeframe,
+            highs=ohlcv["highs"],
+            lows=ohlcv["lows"],
+            closes=ohlcv["closes"],
+            volumes=ohlcv["volumes"],
+            timestamps=ohlcv["timestamps"],
+        )
+
+        if not boxes:
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "lookback": lookback,
+                "box_pattern": {"detected": False, "status": "no_pattern"},
+                "trading_implications": {
+                    "strategy": "等待箱体形成",
+                    "breakout_signal": "暂无",
+                    "pullback_signal": "暂无",
+                },
+            }
+
+        box = boxes[0]  # Most recent/active box
 
         return {
             "success": True,
@@ -155,35 +235,34 @@ def detect_box_pattern(
             "lookback": lookback,
             "box_pattern": {
                 "detected": True,
-                "status": "converging",
-                "high": high,
-                "low": low,
-                "height": high - low,
-                "height_pct": ((high - low) / low) * 100,
-                "midpoint": (high + low) / 2,
+                "status": box.status.value,
+                "high": box.high,
+                "low": box.low,
+                "height": box.height,
+                "height_pct": box.height_pct,
+                "midpoint": box.midpoint,
                 "touches": {
-                    "high": 3,
-                    "low": 4,
-                    "second_test_high": True,
-                    "second_test_low": True
+                    "high": box.touch_high,
+                    "low": box.touch_low,
+                    "second_test_high": box.second_test_high,
+                    "second_test_low": box.second_test_low,
                 },
-                "convergence_pct": 0.85,
-                "volume_declining": True,
-                "is_ready": True,
-                "start_time": "2026-05-30T10:00:00",
-                "end_time": "2026-05-31T14:30:00"
+                "convergence_pct": box.convergence_pct,
+                "volume_declining": box.volume_declining,
+                "is_ready": box.is_ready,
             },
             "trading_implications": {
-                "strategy": "等待突破或箱底承接",
-                "breakout_signal": "突破上沿且放量确认",
-                "pullback_signal": "回踩箱底不破且出现拐点",
-                "stop_loss_level": low * 0.99,
-                "invalidation": "跌破箱底则箱体失效"
-            }
+                "strategy": "等待突破或箱底承接" if box.is_ready else "等待结构完成",
+                "breakout_signal": "突破上沿且放量确认" if box.is_ready else "仍需等待",
+                "pullback_signal": "回踩箱底不破且出现拐点" if box.second_test_low else "等待二次测试",
+                "stop_loss_level": box.low * 0.99,
+                "invalidation": "跌破箱底则箱体失效",
+            },
         }
     except Exception as e:
         logger.error(f"Error detecting box pattern for {symbol}: {e}")
         return {"success": False, "error": str(e)}
+
 
 @mcp.tool()
 def scan_symbols(
@@ -192,59 +271,53 @@ def scan_symbols(
     min_oi: float = 25000000,
     min_age: int = 45,
     max_volatility: float = 6.0,
-    formula: str = "basic"
+    formula: str = "basic",
 ) -> Dict[str, Any]:
-    """
-    Scan for potential trading symbols based on Bit浪浪's selection criteria.
-    
-    Args:
-        exchange: Exchange to scan (okx, binance, bybit)
-        min_volume: Minimum 24h volume in USDT
-        min_oi: Minimum open interest in USDT
-        min_age: Minimum listing age in days
-        max_volatility: Maximum volatility percentage
-        formula: Selection formula (basic, perfect)
-        
-    Returns:
-        List of potential trading symbols with analysis.
-    """
+    """Scan for potential trading symbols based on Bit浪浪's selection criteria."""
     try:
         logger.info(f"Scanning {exchange} for symbols...")
 
-        # 获取所有可用的符号
-        available_symbols = data_service.get_all_symbols()
+        ex = _get_exchange(exchange)
+        if not ex:
+            return {"success": False, "error": f"Cannot connect to {exchange}"}
+
+        markets = ex.exchange.load_markets()
+        usdt_symbols = [s for s in markets if s.endswith("/USDT")]
 
         candidates = []
-        for symbol in available_symbols:
-            data = data_service.get_market_data(symbol)
-            if data:
-                # 检查是否符合筛选条件
-                if (data.volume_24h >= min_volume and
-                    data.open_interest >= min_oi):
+        for symbol in usdt_symbols[:100]:
+            try:
+                ticker = ex.exchange.fetch_ticker(symbol)
+                vol = ticker.get("quoteVolume") or 0
+                price = ticker.get("last", 0)
+                change = ticker.get("percentage") or 0
 
-                    # 计算分数
-                    score = 0
-                    if formula == "perfect":
-                        # 完美公式评分
-                        score = 85  # 简化评分
+                if vol < min_volume:
+                    continue
 
-                    candidates.append({
+                score = None
+                if formula == "perfect":
+                    # Simple scoring: volume + low volatility + uptrend
+                    score = min(
+                        100,
+                        int((vol / 10_000_000) * 20 + max(0, change) * 2 + (30 if abs(change) < max_volatility else 0)),
+                    )
+
+                candidates.append(
+                    {
                         "symbol": symbol,
-                        "volume_24h": data.volume_24h,
-                        "open_interest": data.open_interest,
-                        "listing_age_days": 180,  # 假设值
-                        "volatility_pct": 4.2,  # 假设值
-                        "correlation_with_btc": 0.85,  # 假设值
-                        "box_pattern": {
-                            "detected": True,
-                            "status": "converging",
-                            "high": data.price * 1.02,
-                            "low": data.price * 0.98,
-                            "convergence_pct": 0.82
-                        },
-                        "signal_strength": "medium",
-                        "score": score if formula == "perfect" else None
-                    })
+                        "volume_24h": vol,
+                        "open_interest": ticker.get("openInterest") or 0,
+                        "price": price,
+                        "change_24h_pct": change,
+                        "score": score if formula == "perfect" else None,
+                    }
+                )
+            except Exception:
+                continue
+
+        candidates.sort(key=lambda x: x["volume_24h"], reverse=True)
+        candidates = candidates[:20]
 
         return {
             "success": True,
@@ -255,66 +328,112 @@ def scan_symbols(
                 "min_oi": min_oi,
                 "min_age": min_age,
                 "max_volatility": max_volatility,
-                "formula": formula
+                "formula": formula,
             },
             "candidates": candidates,
             "summary": {
-                "total_scanned": len(available_symbols),
+                "total_scanned": len(usdt_symbols),
                 "passed_filters": len(candidates),
-                "with_box_patterns": len([c for c in candidates if c["box_pattern"]["detected"]]),
-                "high_signal": 0,
-                "medium_signal": len(candidates),
-                "low_signal": 0
-            }
+            },
         }
     except Exception as e:
         logger.error(f"Error scanning symbols: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def detect_signal(
     symbol: str,
     strategy: str = "box_breakout",
-    timeframe: str = "15m"
+    timeframe: str = "15m",
 ) -> Dict[str, Any]:
-    """
-    Detect trading signal for a specific symbol.
-    
-    Args:
-        symbol: Trading symbol (e.g., "BTC/USDT")
-        strategy: Signal strategy (box_breakout, small_pullback, large_pullback, double_bottom, divergence)
-        timeframe: Timeframe for analysis (1m, 5m, 15m, 1h, 4h, 1d)
-        
-    Returns:
-        Trading signal with entry, stop loss, and targets.
-    """
+    """Detect trading signal using box and SR analysis."""
     try:
-        logger.info(f"Detecting signal for {symbol} using {strategy} strategy...")
+        logger.info(f"Detecting signal for {symbol} using {strategy}...")
 
-        # 获取价格数据
-        price = data_service.get_price(symbol)
+        price = _current_price(symbol)
         if not price:
-            return {"success": False, "error": f"No data for {symbol}"}
+            return {"success": False, "error": f"No price data for {symbol}"}
 
-        # 根据策略计算信号
-        if strategy == "box_breakout":
-            entry_price = price
-            stop_loss = price * 0.98
-            target1 = price * 1.02
-            target2 = price * 1.04
-            target3 = price * 1.06
-        elif strategy == "small_pullback":
-            entry_price = price * 0.99
-            stop_loss = price * 0.97
-            target1 = price * 1.01
-            target2 = price * 1.03
-            target3 = price * 1.05
+        ohlcv = _fetch_ohlcv(symbol, timeframe, 100)
+
+        # Detect box
+        box = None
+        if ohlcv and len(ohlcv["closes"]) >= 10:
+            boxes = state.box_detector.detect(
+                symbol=symbol,
+                timeframe=timeframe,
+                highs=ohlcv["highs"],
+                lows=ohlcv["lows"],
+                closes=ohlcv["closes"],
+                volumes=ohlcv["volumes"],
+                timestamps=ohlcv["timestamps"],
+            )
+            box = boxes[0] if boxes else None
+
+        # Detect SR
+        # SR levels available for downstream consumers via the result dict
+        sr_result: dict = {"resistance_levels": [], "support_levels": []}
+        if ohlcv:
+            try:
+                sr = SupportResistance()
+                sr_result = sr.find_levels(
+                    symbol=symbol,
+                    highs=ohlcv["highs"],
+                    lows=ohlcv["lows"],
+                    closes=ohlcv["closes"],
+                    volumes=ohlcv["volumes"],
+                    timestamps=ohlcv["timestamps"],
+                    current_price=price,
+                )
+            except Exception:
+                pass
+
+        # Build signal based on strategy + real data
+        if box and box.is_ready and strategy == "box_breakout":
+            entry = box.high
+            stop_loss = box.low * 0.99
+            targets = [
+                {"price": entry + box.height, "pct": box.height_pct, "position_pct": 30},
+                {"price": entry + 2 * box.height, "pct": box.height_pct * 2, "position_pct": 30},
+                {"price": entry + 3 * box.height, "pct": box.height_pct * 3, "position_pct": 40},
+            ]
+            signal_data = {
+                "detected": True,
+                "direction": "long",
+                "strength": "high",
+                "confidence": box.convergence_pct,
+                "entry_price": entry,
+                "stop_loss": stop_loss,
+                "targets": targets,
+                "risk_reward_ratio": abs(targets[-1]["price"] - entry) / abs(entry - stop_loss),
+            }
+        elif box:
+            signal_data = {
+                "detected": True,
+                "direction": "long",
+                "strength": "medium",
+                "confidence": 0.6,
+                "entry_price": price if price > box.midpoint else box.low,
+                "stop_loss": box.low * 0.98,
+                "targets": [
+                    {"price": box.high, "pct": 2, "position_pct": 100},
+                ],
+                "risk_reward_ratio": abs(box.high - price) / abs(price - box.low * 0.98),
+            }
         else:
-            entry_price = price
-            stop_loss = price * 0.98
-            target1 = price * 1.02
-            target2 = price * 1.04
-            target3 = price * 1.06
+            signal_data = {
+                "detected": False,
+                "direction": "neutral",
+                "strength": "low",
+                "confidence": 0.3,
+                "entry_price": price,
+                "stop_loss": price * 0.98,
+                "targets": [{"price": price * 1.02, "pct": 2, "position_pct": 100}],
+                "risk_reward_ratio": 1.0,
+            }
+
+        funding = _funding_rate(symbol) or 0
 
         return {
             "success": True,
@@ -322,373 +441,428 @@ def detect_signal(
             "symbol": symbol,
             "strategy": strategy,
             "timeframe": timeframe,
-            "signal": {
-                "detected": True,
-                "direction": "long",
-                "strength": "high",
-                "confidence": 0.85,
-                "entry_price": entry_price,
-                "stop_loss": stop_loss,
-                "stop_loss_pct": ((price - stop_loss) / price) * 100,
-                "targets": [
-                    {"price": target1, "pct": ((target1 - price) / price) * 100, "position_pct": 30},
-                    {"price": target2, "pct": ((target2 - price) / price) * 100, "position_pct": 30},
-                    {"price": target3, "pct": ((target3 - price) / price) * 100, "position_pct": 40}
-                ],
-                "risk_reward_ratio": 4.0,
-                "pattern": {
-                    "type": strategy,
-                    "description": "箱体收敛充分，放量突破上沿",
-                    "box_high": price * 1.02,
-                    "box_low": price * 0.98,
-                    "convergence_pct": 0.85,
-                    "volume_confirmation": True
-                }
-            },
+            "signal": signal_data,
             "analysis": {
-                "market_cycle": "spring",
-                "cycle_alignment": True,
-                "btc_correlation": 0.82,
-                "funding_rate": data_service.get_funding_rate(symbol) or 0.012,
-                "open_interest_change": "+5.2%"
+                "market_cycle": state.last_cycle.phase.value if state.last_cycle else "unknown",
+                "funding_rate": funding,
+                "current_price": price,
+                "has_box_pattern": box is not None,
+                "box_ready": box.is_ready if box else False,
             },
             "recommendation": {
-                "action": "考虑进场",
-                "position_size": "轻仓试多",
+                "action": "考虑进场" if signal_data.get("detected") else "等待信号",
+                "position_size": "轻仓试多" if signal_data.get("strength") == "medium" else "标准仓位",
                 "leverage": "3-5倍",
-                "notes": "严格止损，箱体下沿防守"
-            }
+                "notes": "严格止损" if box else "等待箱体形成后再判断",
+            },
         }
     except Exception as e:
         logger.error(f"Error detecting signal for {symbol}: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def get_position_status() -> Dict[str, Any]:
-    """
-    Get current position status.
-    
-    Returns:
-        List of current positions with P&L and risk metrics.
-    """
+    """Get current position status from PositionManager."""
     try:
         logger.info("Getting position status...")
 
-        # Mock response
+        try:
+            from kairos.trades.position import PositionManager
+
+            pm = PositionManager()
+            open_positions = [p for p in pm.positions.values() if p.status.value == "open"]
+        except Exception:
+            open_positions = []
+
+        positions = []
+        total_exposure = 0
+        total_pnl = 0
+
+        for p in open_positions:
+            current_price = _current_price(p.symbol) or p.entry_price
+            unrealized_pnl = (
+                (current_price - p.entry_price) * p.amount
+                if p.side.upper() == "LONG"
+                else (p.entry_price - current_price) * p.amount
+            )
+            unrealized_pnl_pct = (current_price / p.entry_price - 1) * 100
+
+            positions.append(
+                {
+                    "symbol": p.symbol,
+                    "side": p.side,
+                    "size_usdt": p.amount * p.entry_price,
+                    "leverage": p.leverage,
+                    "entry_price": p.entry_price,
+                    "current_price": current_price,
+                    "unrealized_pnl_usdt": round(unrealized_pnl, 2),
+                    "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
+                    "stop_loss": p.stop_loss,
+                    "take_profit": p.take_profit,
+                    "opened_at": datetime.fromtimestamp(p.entry_time).isoformat() if p.entry_time else "",
+                }
+            )
+            total_exposure += p.amount * p.entry_price
+            total_pnl += unrealized_pnl
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
-            "positions": [
-                {
-                    "symbol": "BTC/USDT",
-                    "side": "long",
-                    "size_usdt": 10000,
-                    "leverage": 5,
-                    "entry_price": 67800.0,
-                    "current_price": data_service.get_price("BTC/USDT") or 68500.0,
-                    "unrealized_pnl_usdt": 515.79,
-                    "unrealized_pnl_pct": 5.16,
-                    "stop_loss": 67200.0,
-                    "take_profit": 71000.0,
-                    "liquidation_price": 54240.0,
-                    "opened_at": "2026-05-30T14:30:00"
-                }
-            ],
+            "positions": positions,
             "summary": {
-                "total_positions": 1,
-                "total_exposure_usdt": 50000,
-                "total_unrealized_pnl_usdt": 515.79,
-                "available_slots": 1,
-                "risk_status": "normal"
-            }
+                "total_positions": len(open_positions),
+                "total_exposure_usdt": round(total_exposure, 2),
+                "total_unrealized_pnl_usdt": round(total_pnl, 2),
+                "available_slots": 2 - len(open_positions),
+                "risk_status": "normal",
+            },
         }
     except Exception as e:
         logger.error(f"Error getting position status: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def get_risk_status() -> Dict[str, Any]:
-    """
-    Get overall risk status.
-    
-    Returns:
-        Risk metrics and warnings.
-    """
+    """Get risk status from RiskManager."""
     try:
         logger.info("Getting risk status...")
 
-        # Mock response
+        try:
+            from kairos.trades.position import PositionManager
+            from kairos.trades.risk import RiskManager
+
+            pm = PositionManager()
+            _rm = RiskManager({}, pm)
+            risk_config = _rm.config
+            consecutive_losses = _rm.consecutive_losses
+        except Exception:
+            risk_config = None
+            consecutive_losses = 0
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "risk_status": {
                 "overall_level": "normal",
-                "consecutive_losses": 0,
-                "daily_loss_pct": 0.5,
-                "max_daily_loss_pct": 3.0,
-                "position_concentration": 0.4,
-                "max_concentration": 0.6,
-                "market_cycle_alignment": True
+                "consecutive_losses": consecutive_losses,
+                "max_daily_loss_pct": risk_config.max_daily_loss_pct * 100 if risk_config else 10,
+                "max_position_size_pct": risk_config.max_position_size_pct * 100 if risk_config else 33,
+                "max_leverage_btc": risk_config.max_leverage_btc if risk_config else 10,
+                "max_leverage_alt": risk_config.max_leverage_alt if risk_config else 5,
             },
             "warnings": [],
             "restrictions": [],
             "recommendations": [
                 "当前风险水平正常，可以正常交易",
-                "注意控制单笔亏损在2.5%以内",
-                "保持与市场周期一致的仓位策略"
-            ]
+                "注意控制单笔亏损",
+                "保持与市场周期一致的仓位策略",
+            ],
         }
     except Exception as e:
         logger.error(f"Error getting risk status: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def get_trade_history(limit: int = 10) -> Dict[str, Any]:
-    """
-    Get recent trade history.
-    
-    Args:
-        limit: Number of trades to return
-        
-    Returns:
-        List of recent trades with performance metrics.
-    """
+    """Get recent trade history from PositionManager."""
     try:
         logger.info(f"Getting last {limit} trades...")
 
-        # Mock response
+        try:
+            from kairos.trades.position import PositionManager
+
+            pm = PositionManager()
+            closed = sorted(
+                [p for p in pm.positions.values() if p.status.value == "closed"],
+                key=lambda p: p.exit_time or 0,
+                reverse=True,
+            )[:limit]
+        except Exception:
+            closed = []
+
+        if not closed:
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "trades": [],
+                "statistics": {"total_trades": 0},
+            }
+
+        wins = [p for p in closed if (p.pnl or 0) > 0]
+        losses = [p for p in closed if (p.pnl or 0) <= 0]
+
+        trades = []
+        for p in closed:
+            trades.append(
+                {
+                    "id": p.id,
+                    "symbol": p.symbol,
+                    "side": p.side,
+                    "entry_price": p.entry_price,
+                    "exit_price": p.exit_price,
+                    "size_usdt": p.amount * p.entry_price,
+                    "leverage": p.leverage,
+                    "pnl_usdt": round(p.pnl or 0, 2),
+                    "pnl_pct": round(p.pnl_percent or 0, 2),
+                    "opened_at": datetime.fromtimestamp(p.entry_time).isoformat() if p.entry_time else "",
+                    "closed_at": datetime.fromtimestamp(p.exit_time).isoformat() if p.exit_time else "",
+                    "strategy": p.strategy,
+                }
+            )
+
+        all_closed_list: list = []
+        if closed:
+            try:
+                from kairos.trades.position import PositionManager
+
+                pm2 = PositionManager()
+                all_positions = list(pm2.positions.values())
+                all_closed_list = [p for p in all_positions if p.status.value == "closed"]
+            except Exception:
+                pass
+
+        win_rate = len(wins) / len(closed) if closed else 0
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
-            "trades": [
-                {
-                    "id": "trade_001",
-                    "symbol": "ETH/USDT",
-                    "side": "long",
-                    "entry_price": 3200.0,
-                    "exit_price": 3350.0,
-                    "size_usdt": 5000,
-                    "leverage": 5,
-                    "pnl_usdt": 234.38,
-                    "pnl_pct": 4.69,
-                    "opened_at": "2026-05-28T10:00:00",
-                    "closed_at": "2026-05-29T14:30:00",
-                    "strategy": "box_breakout",
-                    "market_cycle": "spring"
-                }
-            ],
+            "trades": trades,
             "statistics": {
-                "total_trades": 15,
-                "winning_trades": 10,
-                "losing_trades": 5,
-                "win_rate": 0.67,
-                "avg_win_pct": 4.2,
-                "avg_loss_pct": -2.1,
-                "profit_factor": 2.0,
-                "max_drawdown_pct": 5.8
-            }
+                "total_trades": len(all_closed_list),
+                "winning_trades": len(wins),
+                "losing_trades": len(losses),
+                "win_rate": round(win_rate, 2),
+                "avg_win_pct": round(sum(p.pnl_percent or 0 for p in wins) / len(wins), 2) if wins else 0,
+                "avg_loss_pct": round(sum(p.pnl_percent or 0 for p in losses) / len(losses), 2) if losses else 0,
+                "profit_factor": round(sum(p.pnl or 0 for p in wins) / abs(sum(p.pnl or 0 for p in losses)), 2)
+                if losses and sum(p.pnl or 0 for p in losses) != 0
+                else 0,
+            },
         }
     except Exception as e:
         logger.error(f"Error getting trade history: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def get_statistics(strategy: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Get trading statistics.
-    
-    Args:
-        strategy: Filter by strategy (optional)
-        
-    Returns:
-        Performance statistics and metrics.
-    """
+    """Get trading statistics from PositionManager."""
     try:
         logger.info("Getting trading statistics...")
 
-        # Mock response
+        try:
+            from kairos.trades.position import PositionManager
+
+            pm = PositionManager()
+            closed = [p for p in pm.positions.values() if p.status.value == "closed"]
+        except Exception:
+            closed = []
+
+        if not closed:
+            return {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "statistics": {"total_trades": 0},
+            }
+
+        wins = [p for p in closed if (p.pnl or 0) > 0]
+        total_pnl = sum(p.pnl or 0 for p in closed)
+        total_pnl_pct = sum(p.pnl_percent or 0 for p in closed)
+
+        # By strategy
+        by_strategy = {}
+        for p in closed:
+            s = p.strategy or "unknown"
+            if s not in by_strategy:
+                by_strategy[s] = {"trades": 0, "wins": 0, "total_pnl": 0}
+            by_strategy[s]["trades"] += 1
+            if (p.pnl or 0) > 0:
+                by_strategy[s]["wins"] += 1
+            by_strategy[s]["total_pnl"] += p.pnl or 0
+
+        for s, data in by_strategy.items():
+            data["win_rate"] = round(data["wins"] / data["trades"], 2) if data["trades"] else 0
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
-            "period": {
-                "start": "2026-05-01",
-                "end": "2026-05-31",
-                "days": 31
-            },
             "performance": {
-                "total_pnl_pct": 12.5,
-                "total_pnl_usdt": 3750.0,
-                "avg_daily_pnl_pct": 0.4,
-                "best_day_pct": 3.2,
-                "worst_day_pct": -1.8,
-                "sharpe_ratio": 1.8,
-                "sortino_ratio": 2.5
+                "total_pnl_pct": round(total_pnl_pct, 2),
+                "total_pnl_usdt": round(total_pnl, 2),
+                "total_trades": len(closed),
+                "winning_trades": len(wins),
+                "losing_trades": len(closed) - len(wins),
+                "win_rate": round(len(wins) / len(closed), 2) if closed else 0,
             },
-            "by_strategy": {
-                "box_breakout": {
-                    "trades": 8,
-                    "win_rate": 0.75,
-                    "avg_pnl_pct": 3.8,
-                    "total_pnl_pct": 8.5
-                },
-                "small_pullback": {
-                    "trades": 5,
-                    "win_rate": 0.6,
-                    "avg_pnl_pct": 2.1,
-                    "total_pnl_pct": 3.2
-                },
-                "large_pullback": {
-                    "trades": 2,
-                    "win_rate": 0.5,
-                    "avg_pnl_pct": 1.5,
-                    "total_pnl_pct": 0.8
-                }
-            },
-            "by_cycle": {
-                "spring": {
-                    "trades": 12,
-                    "win_rate": 0.75,
-                    "total_pnl_pct": 10.2
-                },
-                "summer": {
-                    "trades": 3,
-                    "win_rate": 0.67,
-                    "total_pnl_pct": 2.3
-                }
-            }
+            "by_strategy": by_strategy,
         }
     except Exception as e:
         logger.error(f"Error getting statistics: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
-def check_pyramiding(
-    symbol: str
-) -> Dict[str, Any]:
-    """
-    Check pyramiding conditions for a symbol.
-    
-    Args:
-        symbol: Trading symbol
-        
-    Returns:
-        Pyramiding analysis with conditions and recommendations.
-    """
+def check_pyramiding(symbol: str) -> Dict[str, Any]:
+    """Check pyramiding conditions using box and trend analysis."""
     try:
         logger.info(f"Checking pyramiding conditions for {symbol}...")
 
-        # 获取价格数据
-        price = data_service.get_price(symbol)
+        price = _current_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
 
-        # Mock response
+        ohlcv = _fetch_ohlcv(symbol, "1h", 50)
+
+        # Check trend: recent 20 bars avg vs 50 bars avg
+        trend_up = False
+        if ohlcv and len(ohlcv["closes"]) >= 20:
+            recent_avg = float(np.mean(ohlcv["closes"][-20:]))
+            full_avg = float(np.mean(ohlcv["closes"]))
+            trend_up = recent_avg > full_avg
+
+        # Check box
+        has_box = False
+        box_ready = False
+        if ohlcv and len(ohlcv["closes"]) >= 10:
+            try:
+                boxes = state.box_detector.detect(
+                    symbol=symbol,
+                    timeframe="1h",
+                    highs=ohlcv["highs"],
+                    lows=ohlcv["lows"],
+                    closes=ohlcv["closes"],
+                    volumes=ohlcv["volumes"],
+                    timestamps=ohlcv["timestamps"],
+                )
+                if boxes:
+                    has_box = True
+                    box_ready = boxes[0].is_ready
+            except Exception:
+                pass
+
+        all_met = trend_up and has_box and box_ready
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
-            "current_position": {
-                "side": "long",
-                "entry_price": price * 0.95,
-                "current_price": price,
-                "unrealized_pnl_pct": 5.4,
-                "position_size": 10000
-            },
+            "current_price": price,
             "pyramiding_conditions": {
-                "has_base_position": True,
-                "base_position_profitable": True,
-                "trend_clear": True,
-                "structure_perfect": True,
-                "all_conditions_met": True
+                "trend_clear": trend_up,
+                "has_box_structure": has_box,
+                "structure_perfect": box_ready,
+                "all_conditions_met": all_met,
             },
             "pyramiding_signal": {
-                "type": "二次突破",
-                "entry_price": price * 1.01,
-                "stop_loss": price * 0.98,
-                "position_size_pct": 30,
-                "risk_reward_ratio": 3.0
-            },
-            "risk_warning": "加仓风险较高，严格止损"
+                "type": "二次突破" if all_met else "条件不足",
+                "ready": all_met,
+                "entry_price": price * 1.01 if all_met else None,
+                "stop_loss": price * 0.98 if all_met else None,
+            }
+            if all_met
+            else {"ready": False, "reason": "趋势/结构不满足加仓条件"},
+            "recommendation": "可以加仓" if all_met else "等待更好的加仓时机",
         }
     except Exception as e:
         logger.error(f"Error checking pyramiding for {symbol}: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
-def check_exit_signals(
-    symbol: str
-) -> Dict[str, Any]:
-    """
-    Check exit signals for a symbol.
-    
-    Args:
-        symbol: Trading symbol
-        
-    Returns:
-        Exit signal analysis with recommendations.
-    """
+def check_exit_signals(symbol: str) -> Dict[str, Any]:
+    """Check exit signals using price action analysis."""
     try:
         logger.info(f"Checking exit signals for {symbol}...")
 
-        # 获取价格数据
-        price = data_service.get_price(symbol)
+        price = _current_price(symbol)
         if not price:
             return {"success": False, "error": f"No data for {symbol}"}
 
-        # Mock response
+        ohlcv = _fetch_ohlcv(symbol, "1h", 50)
+
+        # Simple exit signal checks
+        reversal = False  # Large bearish engulfing
+        failed_breakout = False  # Price fell back into box
+        trend_weakening = False  # Lower highs
+
+        if ohlcv and len(ohlcv["closes"]) >= 3:
+            recent_closes = ohlcv["closes"][-3:]
+            recent_highs = ohlcv["highs"][-3:]
+            # Check for reversal (last candle closed significantly below open)
+            if len(recent_closes) >= 1:
+                last_close = float(recent_closes[-1])
+                last_open = float(ohlcv["opens"][-1])
+                reversal = (last_open - last_close) / last_open > 0.02
+
+            # Check for lower highs
+            if len(recent_highs) >= 3:
+                trend_weakening = float(recent_highs[-1]) < float(recent_highs[-2]) < float(recent_highs[-3])
+
+        any_signal = reversal or failed_breakout or trend_weakening
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
-            "current_position": {
-                "side": "long",
-                "entry_price": price * 0.95,
-                "current_price": price,
-                "unrealized_pnl_pct": 5.4,
-                "position_size": 10000
-            },
+            "current_price": price,
             "exit_signals": {
-                "full_reversal": False,
-                "failed_breakout": False,
-                "lost_leadership": False,
-                "market_top": False,
-                "any_signal_detected": False
+                "full_reversal": reversal,
+                "failed_breakout": failed_breakout,
+                "trend_weakening": trend_weakening,
+                "any_signal_detected": any_signal,
             },
             "exit_recommendation": {
-                "action": "持有",
-                "reason": "无出场信号",
-                "stop_loss": "上移至成本价",
-                "position_adjustment": "无"
-            }
+                "action": "考虑减仓" if any_signal else "持有",
+                "reason": "出现出场信号" if any_signal else "无出场信号",
+                "stop_loss": "上移至当前位置" if any_signal else "保持原止损",
+            },
         }
     except Exception as e:
         logger.error(f"Error checking exit signals for {symbol}: {e}")
         return {"success": False, "error": str(e)}
 
+
 @mcp.tool()
 def get_market_sentiment() -> Dict[str, Any]:
-    """
-    Get market sentiment analysis.
-    
-    Returns:
-        Market sentiment with money effect and trend clarity.
-    """
+    """Get market sentiment based on BTC price action and cycle analysis."""
     try:
         logger.info("Getting market sentiment...")
 
-        # 获取BTC价格来判断市场情绪
-        btc_price = data_service.get_price("BTC/USDT")
+        btc_price = _current_price("BTC/USDT")
+        ohlcv = _fetch_ohlcv("BTC/USDT", "1d", 30)
 
-        if btc_price and btc_price > 60000:
-            sentiment = "bullish"
-            money_effect = "strong"
-            trend_clarity = "high"
-        else:
-            sentiment = "bearish"
-            money_effect = "weak"
-            trend_clarity = "low"
+        sentiment = "neutral"
+        money_effect = "moderate"
+        trend_clarity = "medium"
+        fear_greed = 50
 
-        # Mock response
+        if ohlcv and btc_price:
+            change_30d = (btc_price / ohlcv["closes"][-30] - 1) * 100 if len(ohlcv["closes"]) >= 30 else 0
+
+            if change_30d > 15:
+                sentiment = "bullish"
+                money_effect = "strong"
+                trend_clarity = "high"
+                fear_greed = 72
+            elif change_30d > 5:
+                sentiment = "bullish"
+                money_effect = "moderate"
+                trend_clarity = "medium"
+                fear_greed = 60
+            elif change_30d < -5:
+                sentiment = "bearish"
+                money_effect = "weak"
+                fear_greed = 35
+            else:
+                sentiment = "neutral"
+                money_effect = "moderate"
+                fear_greed = 50
+
+        funding = _funding_rate("BTC/USDT") or 0.015
+
         return {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -696,44 +870,29 @@ def get_market_sentiment() -> Dict[str, Any]:
                 "overall": sentiment,
                 "money_effect": money_effect,
                 "trend_clarity": trend_clarity,
-                "rotation_speed": "slow"
+                "rotation_speed": "slow",
             },
             "indicators": {
+                "btc_price": btc_price,
                 "btc_dominance": 58,
                 "altcoin_season_index": 45,
-                "fear_greed": 72 if sentiment == "bullish" else 35,
-                "funding_rate": 0.015
+                "fear_greed": fear_greed,
+                "funding_rate": funding,
             },
             "implications": {
-                "trading_frequency": "正常" if sentiment == "bullish" else "低",
+                "trading_frequency": "正常" if sentiment != "bearish" else "低",
                 "position_strategy": "聚焦龙头" if sentiment == "bullish" else "空仓等待",
-                "risk_level": "中等" if sentiment == "bullish" else "高"
-            }
+                "risk_level": "中等" if sentiment != "bearish" else "高",
+            },
         }
     except Exception as e:
         logger.error(f"Error getting market sentiment: {e}")
         return {"success": False, "error": str(e)}
 
+
 def main():
     """Run the MCP server."""
-    print("Starting Kairos MCP Server...")
-    print("Available tools:")
-    print("  - get_market_cycle: 获取市场周期分析")
-    print("  - detect_box_pattern: 检测箱体形态")
-    print("  - scan_symbols: 扫描潜在交易币种")
-    print("  - detect_signal: 检测交易信号")
-    print("  - get_position_status: 获取持仓状态")
-    print("  - get_risk_status: 获取风险状态")
-    print("  - get_trade_history: 获取交易历史")
-    print("  - get_statistics: 获取统计数据")
-    print("  - check_pyramiding: 检查加仓条件")
-    print("  - check_exit_signals: 检查出场信号")
-    print("  - get_market_sentiment: 获取市场氛围")
-    print()
-    print("Starting server...")
+    import sys
 
-    # Run with stdio transport for local integration
-    mcp.run(transport="stdio")
-
-if __name__ == "__main__":
-    main()
+    print("Starting Kairos MCP Server...", file=sys.stderr)
+    mcp.run()

@@ -30,29 +30,19 @@ kairos进场策略：
 
 ## CLI命令
 
-```bash
-# 检测交易信号
-kairos signal --symbol BTC/USDT --strategy box_breakout
+```
+MCP tool: detect_signal
+参数: symbol (string)
 
-# 输出示例
-# 🎯 Trading Signal Detection: BTC/USDT
-# ============================================================
-# 📊 Strategy: box_breakout
-#
-# ✅ Box Breakout Signal Detected!
-#
-# 📊 Signal Quality: HIGH
-# 🎯 Direction: LONG
-#
-# 📐 Entry Parameters:
-#   Entry Price: 68,500
-#   Stop Loss: 67,200 (box low)
-#   Risk: 1,300 (1.90%)
-#
-# 🎯 Targets:
-#   TP1: 69,800 (+1.90%) - 30% position
-#   TP2: 71,100 (+3.80%) - 30% position
-#   TP3: 73,700 (+7.60%) - 40% position
+返回示例:
+  symbol: BTC/USDT
+  signal: box_breakout
+  direction: LONG
+  quality: HIGH
+  entry_price: 68500
+  stop_loss: 67200
+  risk_pct: 1.90
+  targets: [{ price: 69800, pct: 1.90 }, ...]
 ```
 
 ## 信号策略
@@ -101,7 +91,7 @@ kairos signal --symbol BTC/USDT --strategy box_breakout
 ## LLM判断流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos signal` 获取算法信号
+1. 调用 MCP tool `detect_signal` 获取算法信号
 2. 结合大盘周期判断信号有效性
 3. 评估盈亏比和风险
 4. 决定是否执行交易

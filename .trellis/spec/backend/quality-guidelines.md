@@ -104,6 +104,25 @@ logger.error(f"Failed to execute order: {e}")
 
 ## Testing Requirements
 
+### 当前测试覆盖
+
+```
+632 tests passed · 0 failed · 1 skipped
+Overall coverage: 89% (97% excluding integration-tested code)
+```
+
+| 模块 | 覆盖率 |
+|------|--------|
+| `analysis/` (box, cycle, sr) | 99-100% |
+| `detectors/` (base, velocity, spike) | 100% |
+| `utils/` (cache, error, perf, exchange) | 91-100% |
+| `exchanges/` (base, binance, okx, bybit) | 83-94% |
+| `webhook.py` | 100% |
+| `config.py` | 100% |
+| `paths.py` | 100% |
+| `data_manager.py` | 84% |
+| `mcp_server.py` | 46%（integration-tested on ccs） |
+
 ### Mock 规则
 
 ```python

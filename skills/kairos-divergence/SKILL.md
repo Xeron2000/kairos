@@ -29,28 +29,12 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 检测分歧信号
-kairos signal --symbol BTC/USDT --strategy divergence
+```
+MCP tool: detect_signal
+参数: symbol (string)
 
-# 输出示例
-# 🎯 Divergence Analysis: BTC/USDT
-# ============================================================
-# 📊 Type: SMALL_PULLBACK (小分歧)
-# 📈 Trend: 主升浪中期
-# 📉 Pullback: -5.2% (从高点)
-# ⏱️  Duration: 3天
-#
-# 📐 Pattern:
-#   High: 68,500
-#   Current: 65,000
-#   Support: 64,200 (箱体下沿)
-#
-# 🎯 Signal: 底部承接机会
-#   Entry: 64,800 (企稳确认)
-#   Stop Loss: 64,100 (箱体下沿)
-#   Target: 68,500 (前高)
-#   Risk/Reward: 5:1
+分歧判断主要依靠 LLM 对价格结构的推理，而非独立 CLI 工具。
+Hermes 调用 detect_signal 获取基础信号后，结合本 skill 的分歧理论进行深度判断。
 ```
 
 ## 分歧类型
@@ -133,8 +117,8 @@ kairos signal --symbol BTC/USDT --strategy divergence
 ## LLM判断流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos signal --strategy divergence` 获取分歧分析
-2. 判断是小分歧还是大分歧
+1. 调用 MCP tool `detect_signal` 获取基础信号
+2. 结合本 skill 的分歧理论（小分歧/大分歧）深度分析价格结构
 3. 评估调整幅度和时间
 4. 寻找介入机会
 5. 制定交易计划

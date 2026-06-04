@@ -31,20 +31,18 @@ kairos将市场分为四个阶段：
 
 ## CLI命令
 
-```bash
-# 查看当前市场周期
-kairos cycle
+```
+MCP tool: get_market_cycle
+参数: 无
 
-# 输出示例
-# 🔄 Market Cycle Analysis
-# ==================================================
-# 📊 Current Phase: SPRING (牛市初期)
-# 📈 BTC 30-day Change: +15.2%
-# 📉 BTC 7-day Change: +5.8%
-# 🌡️  Volatility: 3.2% (Medium)
-# 📊 Volume Trend: Increasing
-# 💰 Avg Funding Rate: 0.012%
-# 💡 Advice: 开始建仓，正常杠杆
+返回示例:
+  phase: SPRING
+  btc_30d_change: +15.2%
+  btc_7d_change: +5.8%
+  volatility: 3.2%
+  volume_trend: increasing
+  funding_rate: 0.012%
+  advice: 开始建仓，正常杠杆
 ```
 
 ## 量化指标
@@ -98,7 +96,7 @@ kairos cycle
 ## LLM判断流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos cycle` 获取量化指标
+1. 调用 MCP tool `get_market_cycle` 获取量化指标
 2. 结合LLM分析市场情绪
 3. 综合判断当前周期阶段
 4. 给出仓位和策略建议

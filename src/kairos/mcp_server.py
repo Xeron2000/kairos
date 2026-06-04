@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from kairos.analysis.box_pattern import BoxDetector
 from kairos.analysis.cycle import CycleDetector
 from kairos.analysis.support_resistance import SupportResistance
+from kairos.utils.blacklist import Blacklist
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kairos-mcp")
@@ -45,12 +46,25 @@ def _get_exchange(exchange_name: str = "okx"):
         return None
 
 
+def _normalize_symbol(symbol: str) -> str:
+    """Normalize symbol to CCXT unified format with :USDT settlement.
+
+    "BTC/USDT" → "BTC/USDT:USDT" for linear perpetual contracts.
+    """
+    if ":" in symbol:
+        return symbol
+    if "/USDT" in symbol and not symbol.endswith(":USDT"):
+        return symbol + ":USDT"
+    return symbol
+
+
 def _fetch_ohlcv(symbol: str, timeframe: str = "1d", limit: int = 100, exchange_name: str = "okx") -> Optional[dict]:
     """Fetch OHLCV data from exchange via REST API."""
     try:
         ex = _get_exchange(exchange_name)
         if not ex:
             return None
+        symbol = _normalize_symbol(symbol)
         ohlcv = ex.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         if not ohlcv:
             return None
@@ -74,6 +88,7 @@ def _current_price(symbol: str, exchange_name: str = "okx") -> Optional[float]:
         ex = _get_exchange(exchange_name)
         if not ex:
             return None
+        symbol = _normalize_symbol(symbol)
         ticker = ex.exchange.fetch_ticker(symbol)
         return ticker.get("last") or ticker.get("close")
     except Exception as e:
@@ -462,249 +477,6 @@ def detect_signal(
 
 
 @mcp.tool()
-def get_position_status() -> Dict[str, Any]:
-    """Get current position status from PositionManager."""
-    try:
-        logger.info("Getting position status...")
-
-        try:
-            from kairos.trades.position import PositionManager
-
-            pm = PositionManager()
-            open_positions = [p for p in pm.positions.values() if p.status.value == "open"]
-        except Exception:
-            open_positions = []
-
-        positions = []
-        total_exposure = 0
-        total_pnl = 0
-
-        for p in open_positions:
-            current_price = _current_price(p.symbol) or p.entry_price
-            unrealized_pnl = (
-                (current_price - p.entry_price) * p.amount
-                if p.side.upper() == "LONG"
-                else (p.entry_price - current_price) * p.amount
-            )
-            unrealized_pnl_pct = (current_price / p.entry_price - 1) * 100
-
-            positions.append(
-                {
-                    "symbol": p.symbol,
-                    "side": p.side,
-                    "size_usdt": p.amount * p.entry_price,
-                    "leverage": p.leverage,
-                    "entry_price": p.entry_price,
-                    "current_price": current_price,
-                    "unrealized_pnl_usdt": round(unrealized_pnl, 2),
-                    "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
-                    "stop_loss": p.stop_loss,
-                    "take_profit": p.take_profit,
-                    "opened_at": datetime.fromtimestamp(p.entry_time).isoformat() if p.entry_time else "",
-                }
-            )
-            total_exposure += p.amount * p.entry_price
-            total_pnl += unrealized_pnl
-
-        return {
-            "success": True,
-            "timestamp": datetime.now().isoformat(),
-            "positions": positions,
-            "summary": {
-                "total_positions": len(open_positions),
-                "total_exposure_usdt": round(total_exposure, 2),
-                "total_unrealized_pnl_usdt": round(total_pnl, 2),
-                "available_slots": 2 - len(open_positions),
-                "risk_status": "normal",
-            },
-        }
-    except Exception as e:
-        logger.error(f"Error getting position status: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-def get_risk_status() -> Dict[str, Any]:
-    """Get risk status from RiskManager."""
-    try:
-        logger.info("Getting risk status...")
-
-        try:
-            from kairos.trades.position import PositionManager
-            from kairos.trades.risk import RiskManager
-
-            pm = PositionManager()
-            _rm = RiskManager({}, pm)
-            risk_config = _rm.config
-            consecutive_losses = _rm.consecutive_losses
-        except Exception:
-            risk_config = None
-            consecutive_losses = 0
-
-        return {
-            "success": True,
-            "timestamp": datetime.now().isoformat(),
-            "risk_status": {
-                "overall_level": "normal",
-                "consecutive_losses": consecutive_losses,
-                "max_daily_loss_pct": risk_config.max_daily_loss_pct * 100 if risk_config else 10,
-                "max_position_size_pct": risk_config.max_position_size_pct * 100 if risk_config else 33,
-                "max_leverage_btc": risk_config.max_leverage_btc if risk_config else 10,
-                "max_leverage_alt": risk_config.max_leverage_alt if risk_config else 5,
-            },
-            "warnings": [],
-            "restrictions": [],
-            "recommendations": [
-                "当前风险水平正常，可以正常交易",
-                "注意控制单笔亏损",
-                "保持与市场周期一致的仓位策略",
-            ],
-        }
-    except Exception as e:
-        logger.error(f"Error getting risk status: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-def get_trade_history(limit: int = 10) -> Dict[str, Any]:
-    """Get recent trade history from PositionManager."""
-    try:
-        logger.info(f"Getting last {limit} trades...")
-
-        try:
-            from kairos.trades.position import PositionManager
-
-            pm = PositionManager()
-            closed = sorted(
-                [p for p in pm.positions.values() if p.status.value == "closed"],
-                key=lambda p: p.exit_time or 0,
-                reverse=True,
-            )[:limit]
-        except Exception:
-            closed = []
-
-        if not closed:
-            return {
-                "success": True,
-                "timestamp": datetime.now().isoformat(),
-                "trades": [],
-                "statistics": {"total_trades": 0},
-            }
-
-        wins = [p for p in closed if (p.pnl or 0) > 0]
-        losses = [p for p in closed if (p.pnl or 0) <= 0]
-
-        trades = []
-        for p in closed:
-            trades.append(
-                {
-                    "id": p.id,
-                    "symbol": p.symbol,
-                    "side": p.side,
-                    "entry_price": p.entry_price,
-                    "exit_price": p.exit_price,
-                    "size_usdt": p.amount * p.entry_price,
-                    "leverage": p.leverage,
-                    "pnl_usdt": round(p.pnl or 0, 2),
-                    "pnl_pct": round(p.pnl_percent or 0, 2),
-                    "opened_at": datetime.fromtimestamp(p.entry_time).isoformat() if p.entry_time else "",
-                    "closed_at": datetime.fromtimestamp(p.exit_time).isoformat() if p.exit_time else "",
-                    "strategy": p.strategy,
-                }
-            )
-
-        all_closed_list: list = []
-        if closed:
-            try:
-                from kairos.trades.position import PositionManager
-
-                pm2 = PositionManager()
-                all_positions = list(pm2.positions.values())
-                all_closed_list = [p for p in all_positions if p.status.value == "closed"]
-            except Exception:
-                pass
-
-        win_rate = len(wins) / len(closed) if closed else 0
-
-        return {
-            "success": True,
-            "timestamp": datetime.now().isoformat(),
-            "trades": trades,
-            "statistics": {
-                "total_trades": len(all_closed_list),
-                "winning_trades": len(wins),
-                "losing_trades": len(losses),
-                "win_rate": round(win_rate, 2),
-                "avg_win_pct": round(sum(p.pnl_percent or 0 for p in wins) / len(wins), 2) if wins else 0,
-                "avg_loss_pct": round(sum(p.pnl_percent or 0 for p in losses) / len(losses), 2) if losses else 0,
-                "profit_factor": round(sum(p.pnl or 0 for p in wins) / abs(sum(p.pnl or 0 for p in losses)), 2)
-                if losses and sum(p.pnl or 0 for p in losses) != 0
-                else 0,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Error getting trade history: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-def get_statistics(strategy: Optional[str] = None) -> Dict[str, Any]:
-    """Get trading statistics from PositionManager."""
-    try:
-        logger.info("Getting trading statistics...")
-
-        try:
-            from kairos.trades.position import PositionManager
-
-            pm = PositionManager()
-            closed = [p for p in pm.positions.values() if p.status.value == "closed"]
-        except Exception:
-            closed = []
-
-        if not closed:
-            return {
-                "success": True,
-                "timestamp": datetime.now().isoformat(),
-                "statistics": {"total_trades": 0},
-            }
-
-        wins = [p for p in closed if (p.pnl or 0) > 0]
-        total_pnl = sum(p.pnl or 0 for p in closed)
-        total_pnl_pct = sum(p.pnl_percent or 0 for p in closed)
-
-        # By strategy
-        by_strategy = {}
-        for p in closed:
-            s = p.strategy or "unknown"
-            if s not in by_strategy:
-                by_strategy[s] = {"trades": 0, "wins": 0, "total_pnl": 0}
-            by_strategy[s]["trades"] += 1
-            if (p.pnl or 0) > 0:
-                by_strategy[s]["wins"] += 1
-            by_strategy[s]["total_pnl"] += p.pnl or 0
-
-        for s, data in by_strategy.items():
-            data["win_rate"] = round(data["wins"] / data["trades"], 2) if data["trades"] else 0
-
-        return {
-            "success": True,
-            "timestamp": datetime.now().isoformat(),
-            "performance": {
-                "total_pnl_pct": round(total_pnl_pct, 2),
-                "total_pnl_usdt": round(total_pnl, 2),
-                "total_trades": len(closed),
-                "winning_trades": len(wins),
-                "losing_trades": len(closed) - len(wins),
-                "win_rate": round(len(wins) / len(closed), 2) if closed else 0,
-            },
-            "by_strategy": by_strategy,
-        }
-    except Exception as e:
-        logger.error(f"Error getting statistics: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
 def check_pyramiding(symbol: str) -> Dict[str, Any]:
     """Check pyramiding conditions using box and trend analysis."""
     try:
@@ -890,9 +662,82 @@ def get_market_sentiment() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+@mcp.tool()
+def blacklist_symbol(symbol: str, reason: str = "", duration_hours: float = 0) -> Dict[str, Any]:
+    """Blacklist a symbol. Hermes can ban noisy coins. duration_hours=0 means permanent.
+
+    Use this when a coin produces too many false signals or has been analyzed and rejected.
+    Hermes should call this proactively when a coin wastes analysis time.
+    """
+    bl = Blacklist()
+    ok = bl.add(symbol, reason, duration_hours)
+    return {
+        "success": ok,
+        "symbol": symbol.upper(),
+        "action": "added" if ok else "already_blocked",
+        "reason": reason,
+        "duration_hours": duration_hours,
+        "blocked_count": len(bl.blocked_symbols()),
+    }
+
+
+@mcp.tool()
+def unblacklist_symbol(symbol: str) -> Dict[str, Any]:
+    """Remove a symbol from blacklist. Hermes can unban when ready to re-analyze."""
+    bl = Blacklist()
+    removed = bl.remove(symbol)
+    return {
+        "success": True,
+        "symbol": symbol.upper(),
+        "was_blocked": removed,
+        "blocked_count": len(bl.blocked_symbols()),
+    }
+
+
+@mcp.tool()
+def list_blacklist() -> Dict[str, Any]:
+    """List all currently blacklisted symbols with reasons and remaining time."""
+    bl = Blacklist()
+    entries = bl.list_entries()
+    return {
+        "success": True,
+        "blocked_count": len(entries),
+        "blocked_symbols": [e["symbol"] for e in entries],
+        "details": entries,
+    }
+
+
 def main():
-    """Run the MCP server."""
+    """Run the MCP server with DataManager bootstrap."""
     import sys
 
+    from kairos.config import load_config
+
     print("Starting Kairos MCP Server...", file=sys.stderr)
-    mcp.run()
+
+    try:
+        config = load_config()
+    except Exception:
+        import logging
+
+        logging.getLogger("kairos").warning("Config load failed — using defaults")
+        config = {}
+
+    import anyio
+
+    from kairos.data.data_manager import DataManager
+
+    dm = DataManager(config)
+
+    async def _main():
+        await dm.start()
+        await mcp.run_stdio_async()
+
+    try:
+        anyio.run(_main)
+    except KeyboardInterrupt:
+        print("\nShutting down...", file=sys.stderr)
+    finally:
+        import asyncio as _asyncio
+
+        _asyncio.run(dm.stop())

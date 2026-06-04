@@ -28,7 +28,7 @@ class PriceLevel:
 class SupportResistance:
     """Detects support and resistance levels."""
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict | None = None):
         self.logger = logging.getLogger("kairos.analysis.sr")
         config = config or {}
 

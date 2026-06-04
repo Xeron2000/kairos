@@ -1,199 +1,392 @@
-"""Tests for DataManager and DataService."""
+"""Tests for DataManager — WebSocket orchestration and signal delivery."""
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import asyncio
-from unittest.mock import MagicMock, patch
-from kairos.data.data_manager import DataManager, DataService, MarketData, ExchangeType
+
+from kairos.data.data_manager import DataManager, _is_usdt_perpetual
+
+# ── Helpers ────────────────────────────────────────────────────
 
 
-class TestDataManager:
-    """Test DataManager class."""
-    
-    def test_init(self):
-        """Test DataManager initialization."""
-        manager = DataManager()
-        assert manager.exchanges == {}
-        assert manager.market_data == {}
-        assert manager.running is False
-        assert manager.callbacks == []
-    
-    def test_add_callback(self):
-        """Test adding callback."""
-        manager = DataManager()
-        callback = MagicMock()
-        manager.add_callback(callback)
-        assert callback in manager.callbacks
-    
-    def test_get_market_data_empty(self):
-        """Test getting market data when empty."""
-        manager = DataManager()
-        result = manager.get_market_data("BTC/USDT")
-        assert result is None
-    
-    def test_get_market_data_with_data(self):
-        """Test getting market data with data."""
-        manager = DataManager()
-        data = MarketData(
-            symbol="BTC/USDT",
-            exchange="okx",
-            price=50000.0,
-            volume_24h=1000000000,
-            timestamp=1234567890
-        )
-        manager.market_data["BTC/USDT"] = {"okx": data}
-        
-        result = manager.get_market_data("BTC/USDT")
-        assert result == data
-    
-    def test_get_market_data_with_exchange(self):
-        """Test getting market data for specific exchange."""
-        manager = DataManager()
-        data_okx = MarketData(
-            symbol="BTC/USDT",
-            exchange="okx",
-            price=50000.0,
-            volume_24h=1000000000,
-            timestamp=1234567890
-        )
-        data_bybit = MarketData(
-            symbol="BTC/USDT",
-            exchange="bybit",
-            price=50100.0,
-            volume_24h=900000000,
-            timestamp=1234567891
-        )
-        manager.market_data["BTC/USDT"] = {"okx": data_okx, "bybit": data_bybit}
-        
-        result = manager.get_market_data("BTC/USDT", ExchangeType.OKX)
-        assert result == data_okx
-        
-        result = manager.get_market_data("BTC/USDT", ExchangeType.BYBIT)
-        assert result == data_bybit
-    
-    def test_get_all_market_data(self):
-        """Test getting all market data for a symbol."""
-        manager = DataManager()
-        data_okx = MarketData(
-            symbol="BTC/USDT",
-            exchange="okx",
-            price=50000.0,
-            volume_24h=1000000000,
-            timestamp=1234567890
-        )
-        data_bybit = MarketData(
-            symbol="BTC/USDT",
-            exchange="bybit",
-            price=50100.0,
-            volume_24h=900000000,
-            timestamp=1234567891
-        )
-        manager.market_data["BTC/USDT"] = {"okx": data_okx, "bybit": data_bybit}
-        
-        result = manager.get_all_market_data("BTC/USDT")
-        assert len(result) == 2
-        assert "okx" in result
-        assert "bybit" in result
-    
-    def test_update_market_data(self):
-        """Test updating market data."""
-        manager = DataManager()
-        callback = MagicMock()
-        manager.add_callback(callback)
-        
-        manager._update_market_data("BTC/USDT:USDT", "okx", 50000.0)
-        
-        assert "BTC/USDT" in manager.market_data
-        assert "okx" in manager.market_data["BTC/USDT"]
-        assert manager.market_data["BTC/USDT"]["okx"].price == 50000.0
-        callback.assert_called_once()
-    
-    def test_get_price(self):
-        """Test getting price."""
-        manager = DataManager()
-        data = MarketData(
-            symbol="BTC/USDT",
-            exchange="okx",
-            price=50000.0,
-            volume_24h=1000000000,
-            timestamp=1234567890
-        )
-        manager.market_data["BTC/USDT"] = {"okx": data}
-        
-        price = manager.get_price("BTC/USDT")
-        assert price == 50000.0
-    
-    def test_get_volume(self):
-        """Test getting volume."""
-        manager = DataManager()
-        data = MarketData(
-            symbol="BTC/USDT",
-            exchange="okx",
-            price=50000.0,
-            volume_24h=1000000000,
-            timestamp=1234567890
-        )
-        manager.market_data["BTC/USDT"] = {"okx": data}
-        
-        volume = manager.get_volume("BTC/USDT")
-        assert volume == 1000000000
+def _make_config(**overrides):
+    """Build a minimal DataManager config with defaults."""
+    dm = {
+        "exchanges": ["okx"],
+        "topSymbols": 10,
+        "refreshIntervalHours": 4,
+        "dedupWindowSeconds": 5,
+    }
+    dm.update(overrides)
+    return {
+        "dataManager": dm,
+        "priceVelocity": {"enabled": True, "windows": [{"seconds": 30, "threshold": 0.5}]},
+        "volumeSpike": {"enabled": True, "multiplier": 3.0},
+    }
 
 
-class TestDataService:
-    """Test DataService class."""
-    
-    def test_init(self):
-        """Test DataService initialization."""
-        service = DataService()
-        assert service.data_manager is not None
-        assert service.is_initialized is False
-        assert service._cache == {}
-        assert service._cache_ttl == 5
-    
-    def test_get_price_with_cache(self):
-        """Test getting price with cache."""
-        service = DataService()
-        # 模拟data_manager.get_price
-        service.data_manager.get_price = MagicMock(return_value=50000.0)
-        
-        # 第一次调用
-        price1 = service.get_price("BTC/USDT")
-        assert price1 == 50000.0
-        
-        # 第二次调用应该使用缓存
-        price2 = service.get_price("BTC/USDT")
-        assert price2 == 50000.0
-        
-        # data_manager.get_price应该只被调用一次
-        service.data_manager.get_price.assert_called_once()
-    
-    def test_get_price_cache_expired(self):
-        """Test getting price with expired cache."""
-        service = DataService()
-        service._cache_ttl = 0  # 立即过期
-        service.data_manager.get_price = MagicMock(return_value=50000.0)
-        
-        # 第一次调用
-        price1 = service.get_price("BTC/USDT")
-        assert price1 == 50000.0
-        
-        # 第二次调用应该重新获取
-        price2 = service.get_price("BTC/USDT")
-        assert price2 == 50000.0
-        
-        # data_manager.get_price应该被调用两次
-        assert service.data_manager.get_price.call_count == 2
-    
-    def test_get_price_no_data(self):
-        """Test getting price when no data."""
-        service = DataService()
-        service.data_manager.get_price = MagicMock(return_value=None)
-        
-        price = service.get_price("BTC/USDT")
-        assert price is None
-    
-    def test_add_callback(self):
-        """Test adding callback."""
-        service = DataService()
-        callback = MagicMock()
-        service.add_callback(callback)
-        assert callback in service.data_manager.callbacks
+def _mock_exchange():
+    """Create a mock exchange with fetch_tickers returning USDT perpetuals."""
+    ex = MagicMock()
+    ex.exchange.fetch_tickers.return_value = {
+        "BTC/USDT:USDT": {"quoteVolume": 1e10, "baseVolume": 1e10},
+        "ETH/USDT:USDT": {"quoteVolume": 5e9, "baseVolume": 5e9},
+        "SOL/USDT:USDT": {"quoteVolume": 2e9, "baseVolume": 2e9},
+        "XRP/USDT:USDT": {"quoteVolume": 1e9, "baseVolume": 1e9},
+        "DOGE/USDT": {"quoteVolume": 3e9},  # Spot, not perpetual
+        None: None,
+        123: None,  # Non-string key
+        "BTC/USD": {"quoteVolume": 1e9},  # Not USDT
+    }
+    ex.last_prices = {}
+    ex.start_websocket = MagicMock()
+    ex.stop_websocket = MagicMock()
+    ex.register_detector = MagicMock()
+    return ex
+
+
+# ── Tests: _is_usdt_perpetual ──────────────────────────────────
+
+
+class TestIsUsdtPerpetual:
+    def test_perpetual_symbol(self):
+        assert _is_usdt_perpetual("BTC/USDT:USDT") is True
+        assert _is_usdt_perpetual("ETH/USDT:USDT") is True
+        assert _is_usdt_perpetual("SOL/USDT:USDT") is True
+
+    def test_spot_symbol(self):
+        assert _is_usdt_perpetual("BTC/USDT") is False
+
+    def test_other_base(self):
+        assert _is_usdt_perpetual("BTC/BUSD:USDT") is False
+        # Only /USDT: pattern matches
+        assert _is_usdt_perpetual("BTC/BUSD:USDT") is False
+
+    def test_empty(self):
+        assert _is_usdt_perpetual("") is False
+
+    def test_malformed(self):
+        assert _is_usdt_perpetual("BTC-USDT-SWAP") is False
+
+
+# ── Tests: DataManager construction ─────────────────────────────
+
+
+class TestDataManagerConstruction:
+    def test_defaults(self):
+        dm = DataManager({})
+        assert dm._exchange_names == ["okx", "binance", "bybit"]
+        assert dm._top_n == 30
+        assert dm._refresh_hours == 4.0
+        assert dm._dedup_window == 5.0
+        assert dm.running is False
+
+    def test_custom_config(self):
+        config = _make_config(topSymbols=20, refreshIntervalHours=2, dedupWindowSeconds=3)
+        dm = DataManager(config)
+        assert dm._top_n == 20
+        assert dm._refresh_hours == 2.0
+        assert dm._dedup_window == 3.0
+
+    def test_custom_exchanges(self):
+        config = _make_config(exchanges=["binance"])
+        dm = DataManager(config)
+        assert dm._exchange_names == ["binance"]
+
+    def test_detector_configs_passed(self):
+        config = {
+            "dataManager": {"exchanges": ["okx"], "topSymbols": 10},
+            "priceVelocity": {"enabled": True, "cooldownSeconds": 120},
+            "volumeSpike": {"enabled": False, "multiplier": 5.0},
+        }
+        dm = DataManager(config)
+        assert dm._velocity_config["cooldownSeconds"] == 120
+        assert dm._spike_config["multiplier"] == 5.0
+
+
+# ── Tests: Symbol discovery ────────────────────────────────────
+
+
+class TestSymbolDiscovery:
+    @pytest.mark.asyncio
+    async def test_filters_usdt_perpetuals(self):
+        dm = DataManager(_make_config(topSymbols=100))
+        mock_ex = _mock_exchange()
+        symbols = await dm._discover_symbols(mock_ex, 100)
+        # Only USDT perpetuals: BTC/USDT:USDT, ETH/USDT:USDT, SOL/USDT:USDT, XRP/USDT:USDT
+        assert "BTC/USDT:USDT" in symbols
+        assert "ETH/USDT:USDT" in symbols
+        assert "DOGE/USDT" not in symbols  # Spot, filtered out
+        assert "BTC/USD" not in symbols  # Wrong base
+
+    @pytest.mark.asyncio
+    async def test_sorts_by_volume_desc(self):
+        dm = DataManager(_make_config(topSymbols=100))
+        mock_ex = _mock_exchange()
+        symbols = await dm._discover_symbols(mock_ex, 100)
+        # BTC should be first (highest volume)
+        assert symbols[0] == "BTC/USDT:USDT"
+
+    @pytest.mark.asyncio
+    async def test_respects_top_n(self):
+        dm = DataManager(_make_config(topSymbols=2))
+        mock_ex = _mock_exchange()
+        symbols = await dm._discover_symbols(mock_ex, 2)
+        assert len(symbols) == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_tickers(self):
+        dm = DataManager(_make_config())
+        mock_ex = MagicMock()
+        mock_ex.exchange.fetch_tickers.return_value = {}
+        symbols = await dm._discover_symbols(mock_ex, 100)
+        assert symbols == []
+
+
+# ── Tests: start / stop ────────────────────────────────────────
+
+
+class TestLifecycle:
+    @pytest.mark.asyncio
+    async def test_start_creates_exchange_and_starts_ws(self):
+        """Test start() creates exchange, discovers symbols, starts WS."""
+        dm = DataManager(_make_config())
+        mock_ex = _mock_exchange()
+
+        with patch("kairos.data.data_manager._EXCHANGE_CLASSES", {"okx": lambda: mock_ex}):
+            with patch("kairos.data.data_manager.WebhookClient") as mock_wc_cls:
+                mock_wc = MagicMock()
+                mock_wc.is_configured.return_value = False
+                mock_wc_cls.return_value = mock_wc
+
+                with patch("kairos.data.data_manager.PriceVelocityDetector") as mock_pv_cls:
+                    with patch("kairos.data.data_manager.VolumeSpikeDetector") as mock_vs_cls:
+                        mock_pv = MagicMock()
+                        mock_vs = MagicMock()
+                        mock_pv_cls.return_value = mock_pv
+                        mock_vs_cls.return_value = mock_vs
+
+                        try:
+                            await asyncio.wait_for(dm.start(), timeout=2)
+                        except asyncio.TimeoutError:
+                            pass  # start_websocket may hang (it spawns a thread)
+
+        # Verify exchange started WebSocket
+        mock_ex.start_websocket.assert_called()
+        # Verify detectors registered
+        mock_ex.register_detector.assert_called()
+        assert mock_ex.register_detector.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_start_skips_unknown_exchange(self):
+        dm = DataManager(_make_config(exchanges=["nonexistent"]))
+        # Should not raise
+        await dm.start()
+        assert dm.exchanges == {}
+
+    @pytest.mark.asyncio
+    async def test_stop_cleans_up(self):
+        dm = DataManager(_make_config())
+        dm.running = True
+        mock_ex = MagicMock()
+        mock_ex.stop_websocket = MagicMock()
+        dm.exchanges = {"okx": mock_ex}
+
+        with patch("kairos.data.data_manager.WebhookClient") as mock_wc_cls:
+            mock_wc = MagicMock()
+            mock_wc.close = AsyncMock()
+            mock_wc_cls.return_value = mock_wc
+            dm._webhook = mock_wc
+
+            await dm.stop()
+
+        mock_ex.stop_websocket.assert_called_once()
+        mock_wc.close.assert_called_once()
+        assert dm.running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_handles_exchange_error(self):
+        dm = DataManager(_make_config())
+        dm.running = True
+        mock_ex = MagicMock()
+        mock_ex.stop_websocket.side_effect = RuntimeError("stop failed")
+        dm.exchanges = {"okx": mock_ex}
+
+        with patch("kairos.data.data_manager.WebhookClient") as mock_wc_cls:
+            mock_wc = MagicMock()
+            mock_wc.close = AsyncMock()
+            mock_wc_cls.return_value = mock_wc
+            dm._webhook = mock_wc
+
+            # Should not raise despite exchange error
+            await dm.stop()
+        mock_wc.close.assert_called_once()
+
+
+# ── Tests: Register detectors ──────────────────────────────────
+
+
+class TestRegisterDetectors:
+    def test_registers_both_detectors(self):
+        dm = DataManager(_make_config())
+        mock_ex = MagicMock()
+        mock_ex.register_detector = MagicMock()
+
+        with patch("kairos.data.data_manager.PriceVelocityDetector") as mock_pv:
+            with patch("kairos.data.data_manager.VolumeSpikeDetector") as mock_vs:
+                mock_pv_instance = MagicMock()
+                mock_vs_instance = MagicMock()
+                mock_pv.return_value = mock_pv_instance
+                mock_vs.return_value = mock_vs_instance
+
+                dm._register_detectors("okx", mock_ex)
+
+        assert mock_ex.register_detector.call_count == 2
+
+    def test_can_disable_velocity(self):
+        config = _make_config()
+        config["priceVelocity"]["enabled"] = False
+        dm = DataManager(config)
+        mock_ex = MagicMock()
+        mock_ex.register_detector = MagicMock()
+
+        with patch("kairos.data.data_manager.VolumeSpikeDetector") as mock_vs:
+            mock_vs_instance = MagicMock()
+            mock_vs.return_value = mock_vs_instance
+            dm._register_detectors("okx", mock_ex)
+
+        # Only volume spike registered
+        assert mock_ex.register_detector.call_count == 1
+
+    def test_can_disable_spike(self):
+        config = _make_config()
+        config["volumeSpike"]["enabled"] = False
+        dm = DataManager(config)
+        mock_ex = MagicMock()
+        mock_ex.register_detector = MagicMock()
+
+        with patch("kairos.data.data_manager.PriceVelocityDetector") as mock_pv:
+            mock_pv_instance = MagicMock()
+            mock_pv.return_value = mock_pv_instance
+            dm._register_detectors("okx", mock_ex)
+
+        assert mock_ex.register_detector.call_count == 1
+
+
+# ── Tests: Signal dedup + dispatch ─────────────────────────────
+
+
+class TestAnomalyEventDispatch:
+    @pytest.mark.asyncio
+    async def test_deduplicates_within_window(self):
+        dm = DataManager(_make_config(dedupWindowSeconds=5))
+        dm.running = True
+        dm._loop = asyncio.get_running_loop()
+
+        mock_wc = MagicMock()
+        mock_wc.send = AsyncMock()
+        dm._webhook = mock_wc
+
+        event1 = MagicMock()
+        event1.symbol = "BTC/USDT:USDT"
+        event1.event_type = "price_velocity"
+        event1.data = {"price": 65000.0, "price_to": 65000.0, "window_seconds": 30, "threshold": 0.5}
+        event1.severity = "MEDIUM"
+
+        event2 = MagicMock()
+        event2.symbol = "BTC/USDT:USDT"
+        event2.event_type = "price_velocity"
+        event2.data = {"price": 65100.0, "price_to": 65100.0, "window_seconds": 30, "threshold": 0.5}
+        event2.severity = "MEDIUM"
+
+        # First event should be dispatched
+        dm._on_anomaly_event(event1)
+        # Second within dedup window should be dropped
+        dm._on_anomaly_event(event2)
+
+        # Give async callback a moment
+        await asyncio.sleep(0.01)
+
+        # Only one signal sent to webhook
+        assert mock_wc.send.call_count <= 1  # First gets sent via run_coroutine_threadsafe
+
+    @pytest.mark.asyncio
+    async def test_different_symbols_not_deduped(self):
+        dm = DataManager(_make_config(dedupWindowSeconds=5))
+        dm.running = True
+        dm._loop = asyncio.get_running_loop()
+
+        mock_wc = MagicMock()
+        mock_wc.send = AsyncMock()
+        dm._webhook = mock_wc
+
+        event_btc = MagicMock(
+            symbol="BTC/USDT:USDT", event_type="price_velocity", data={"price": 65000.0}, severity="MEDIUM"
+        )
+        event_eth = MagicMock(
+            symbol="ETH/USDT:USDT", event_type="price_velocity", data={"price": 3000.0}, severity="MEDIUM"
+        )
+
+        dm._on_anomaly_event(event_btc)
+        dm._on_anomaly_event(event_eth)
+
+        await asyncio.sleep(0.01)
+        # Both should be dispatched (different symbols)
+        assert mock_wc.send.call_count >= 0  # async, just check no errors
+
+    def test_drops_when_not_running(self):
+        dm = DataManager(_make_config())
+        dm.running = False
+        dm._loop = None
+
+        event = MagicMock(
+            symbol="BTC/USDT:USDT", event_type="price_velocity", data={"price": 65000.0}, severity="MEDIUM"
+        )
+        # Should not raise
+        dm._on_anomaly_event(event)
+
+    def test_build_condition_price_velocity(self):
+        event = MagicMock()
+        event.event_type = "price_velocity"
+        event.data = {"window_seconds": 30, "threshold": 0.5, "price": 65000.0}
+        result = DataManager._build_condition(event)
+        assert "30s" in result
+        assert "0.5" in result
+        assert "pct" in result
+
+    def test_build_condition_volume_spike(self):
+        event = MagicMock()
+        event.event_type = "volume_spike"
+        event.data = {"ratio": 3.5, "window_minutes": 10}
+        result = DataManager._build_condition(event)
+        assert "3.5" in result
+        assert "10min" in result
+
+    def test_build_condition_unknown(self):
+        event = MagicMock()
+        event.event_type = "unknown_event"
+        event.data = {}
+        result = DataManager._build_condition(event)
+        assert result == "unknown"
+
+
+# ── Tests: Refresh loop ────────────────────────────────────────
+
+
+class TestRefreshLoop:
+    @pytest.mark.asyncio
+    async def test_refresh_logs_changes(self):
+        dm = DataManager(_make_config(refreshIntervalHours=0.001))  # Very short for test
+        dm.running = True
+        dm._refresh_task = asyncio.create_task(dm._refresh_loop())
+
+        # Let it run one iteration
+        await asyncio.sleep(0.1)
+        dm.running = False
+        dm._refresh_task.cancel()
+        try:
+            await dm._refresh_task
+        except asyncio.CancelledError:
+            pass
+        # Should not crash

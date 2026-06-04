@@ -30,29 +30,12 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 扫描新币机会
-kairos scan --new-coins
+```
+MCP tool: scan_symbols
+参数: 无
 
-# 输出示例
-# 🆕 New Coin Analysis
-# ============================================================
-# 📊 Listing Age: 15 days
-# 📈 Current Price: $12.50
-# 📉 Change since listing: -25%
-#
-# 📐 Structure:
-#   High: $16.80 (上市高点)
-#   Low: $11.50 (上市低点)
-#   Current: $12.50
-#
-# 🎯 Signal: 做空机会
-#   Entry: $13.20 (反弹做空)
-#   Stop Loss: $14.00 (前高)
-#   Target: $11.00 (上市低点下方)
-#   Risk/Reward: 3:1
-#
-# ⚠️ Warning: 新币抛压沉重，严格止损
+新币筛选目前由 Hermes 根据上市时间、价格结构等信息进行 LLM 判断，
+结合本 skill 的新币交易理论做决策。
 ```
 
 ## 新币特征

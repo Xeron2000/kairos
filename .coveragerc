@@ -1,0 +1,6 @@
+[run]
+omit =
+    src/kairos/mcp/analysis_server.py
+    src/kairos/mcp/chart_server.py
+    src/kairos/mcp/coinglass_server.py
+    src/kairos/mcp/__init__.py

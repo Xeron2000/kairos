@@ -1,258 +1,86 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║                    PriceSentry 价格监控系统配置模板                           ║
-# ║                    PriceSentry Configuration Template                        ║
+# ║                    Kairos 交易分析系统配置                                   ║
+# ║                    Kairos Trading Analysis Config                           ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 #
 # 📖 使用说明 / Usage:
 #    1. 复制此文件为 config.yaml / Copy this file to config.yaml
-#    2. 根据注释修改配置 / Modify settings according to comments
-#    3. 运行 `uv run python -m src.app.cli` 启动 / Run to start
+#    2. Kairos MCP server 使用 CCXT 公开 WebSocket 拉取数据，无需 API Key
+#       Kairos MCP server uses CCXT public WebSocket — no API key required
+#    3. 运行 `uv run kairos-mcp` 启动 MCP Server / Start MCP server
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
-
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │                           基础配置 / Basic Settings                          │
-# └─────────────────────────────────────────────────────────────────────────────┘
-
-# 交易所 / Exchange (必填 / Required)
-# ─────────────────────────────────────
+# 默认交易所 / Default Exchange
+# ─────────────────────────────
 # 可选值 / Options: "okx", "bybit", "binance"
-#
-# 💡 推荐说明 / Recommendations:
-#    • OKX    - 推荐，无地区限制，API 稳定
-#               Recommended, no regional restrictions, stable API
-#    • Bybit  - 推荐，无地区限制，合约品种丰富
-#               Recommended, no regional restrictions, rich derivatives
-#    • Binance - 中国大陆需要代理访问
-#                May require proxy in China
-#
 exchange: "okx"
 
-
-# 默认时间周期 / Default Timeframe (K线聚合窗口 / Candlestick aggregation window)
-# ─────────────────────────────────────────────────────────────────────────────────
-# 可选值 / Options: "1m", "5m", "15m", "1h", "1d"
-#
-# 💡 用途说明 / Usage Guide:
-#    • 1m  - 最敏感，适合短线/高频监控
-#            Most sensitive, for scalping/high-frequency
-#    • 5m  - 适中，推荐日常使用 (默认)
-#            Balanced, recommended for daily use (default)
-#    • 15m - 过滤小波动，减少通知
-#            Filters small moves, fewer notifications
-#    • 1h  - 适合中长线趋势监控
-#            For medium/long-term trend monitoring
-#    • 1d  - 适合长线投资者
-#            For long-term investors
-#
-defaultTimeframe: "5m"
-
-
-# 监控检查间隔 / Check Interval (调度频率 / Scheduling frequency)
-# ─────────────────────────────────────────────────────────────────
-# 可选值 / Options: "1m", "5m", "15m", "1h", "1d"
-#
-# ⚠️ 注意 / Note:
-#    检查间隔 ≠ 时间周期 / Check interval ≠ Timeframe
-#    • 时间周期: K线聚合窗口 (如 5m = 5分钟K线)
-#      Timeframe: Candlestick window (e.g., 5m = 5-minute candles)
-#    • 检查间隔: 多久检查一次价格变化
-#      Check interval: How often to check for price changes
-#
-# 💡 建议: 检查间隔 ≤ 时间周期
-#    Tip: Check interval should be ≤ Timeframe
-#
-checkInterval: "1m"
-
-
-# 价格变化阈值 / Price Change Threshold (百分比 / Percentage)
-# ─────────────────────────────────────────────────────────────
-# 价格变化超过此百分比才发送通知
-# Notifications sent only when price change exceeds this percentage
-#
-# 💡 示例 / Examples:
-#    • 0.5 - 敏感，适合短线交易者 / Sensitive, for active traders
-#    • 1   - 适中，推荐大多数用户 / Balanced, recommended (default)
-#    • 3   - 宽松，只关注大幅波动 / Relaxed, only major movements
-#
-defaultThreshold: 1
-
-
-# 通知时区 / Notification Timezone
+# 默认时间周期 / Default Timeframe
 # ─────────────────────────────────
-# 用于生成告警时间戳 / Used for alert timestamps
-# 常用值 / Common values:
-#    • Asia/Shanghai  - 中国
-#    • Asia/Tokyo     - 日本
-#    • America/New_York - 美东
-#    • Europe/London  - 伦敦
-#    • UTC            - 协调世界时
-#
+# 可选值 / Options: "1m", "5m", "15m", "1h", "1d"
+defaultTimeframe: "1d"
+
+# 时区 / Timezone
 notificationTimezone: "Asia/Shanghai"
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Data Manager 配置 / Data Manager Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+dataManager:
+  # 交易所列表 / Exchange list
+  # 可选值 / Options: ["okx", "binance", "bybit"]
+  exchanges:
+    - "okx"
+    - "binance"
+    - "bybit"
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │                         交易对配置 / Trading Pairs                           │
-# └─────────────────────────────────────────────────────────────────────────────┘
+  # 每个交易所订阅的 Top N 合约 / Top N symbols per exchange
+  # Low volume = no opportunity. Top 30 keeps only liquid markets.
+  topSymbols: 30
 
-# 通知渠道 / Notification Channels
-# ─────────────────────────────────
-# 目前仅支持 telegram / Currently only supports telegram
-#
-notificationChannels:
-  - "telegram"
+  # Symbol 刷新间隔 (小时) / Symbol refresh interval (hours)
+  refreshIntervalHours: 4
 
+  # 跨交易所信号去重窗口 (秒) / Cross-exchange dedup window (seconds)
+  dedupWindowSeconds: 5
 
-# 监控交易对 / Trading Pairs to Monitor
-# ──────────────────────────────────────
-# 💡 三种模式 / Three Modes:
-#
-# 【模式1】auto (推荐 / Recommended)
-#    自动获取成交量前 N 的交易对（默认 50），每 4 小时刷新
-#    Auto-fetch top N pairs by volume (default 50), refreshes every 4 hours
-#    notificationSymbols: auto
-#
-# 【模式2】default
-#    固定使用市值前 50 币种，列表不会自动更新
-#    Fixed top 50 by market cap, list does not auto-update
-#    notificationSymbols: default
-#
-# 【模式3】手动指定 / Manual
-#    自定义交易对列表
-#    Custom trading pairs list
-#    格式 / Format: SYMBOL/USDT:USDT
-#
-# 示例 / Example:
-notificationSymbols:
-  - "BTC/USDT:USDT"
-  - "ETH/USDT:USDT"
-  - "SOL/USDT:USDT"
-
-# 使用 auto 模式 / Use auto mode:
-# notificationSymbols: auto
-
-# 使用 default 模式 / Use default mode:
-# notificationSymbols: default
-
-# 📋 市值前50币种 (不含稳定币) / Top 50 by market cap (excluding stablecoins):
-# BTC, ETH, BNB, XRP, SOL, DOGE, ADA, TRX, HYPE, SUI,
-# BCH, LINK, ZEC, HBAR, XLM, XMR, AVAX, SHIB, LEO, DOT,
-# LTC, UNI, NEAR, APT, ICP, PEPE, KAS, RENDER, ARB, OP,
-# INJ, VET, ETC, OKB, CRO, FIL, MNT, IMX, STX, TIA,
-# SEI, BONK, WIF, FLOKI, FET, AAVE, QNT, FTM, ALGO, THETA
-
-
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │                      Telegram 配置 / Telegram Settings                       │
-# └─────────────────────────────────────────────────────────────────────────────┘
-
-# 💡 如何获取 Bot Token / How to get Bot Token:
-#    1. 在 Telegram 中搜索 @BotFather / Search @BotFather in Telegram
-#    2. 发送 /newbot 创建新机器人 / Send /newbot to create a new bot
-#    3. 按提示设置机器人名称 / Follow prompts to set bot name
-#    4. 复制返回的 Token / Copy the returned Token
-#       格式 / Format: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-#
-# 💡 如何获取 Chat ID / How to get Chat ID:
-#    方法1 / Method 1: 搜索 @userinfobot，发送任意消息
-#                      Search @userinfobot, send any message
-#    方法2 / Method 2: 搜索 @getmyid_bot，发送 /start
-#                      Search @getmyid_bot, send /start
-#    获取群组 ID / For group ID: 将机器人加入群组后发送消息
-#                                Add bot to group and send a message
-#
-# ⚠️ chatId 是必填的 / chatId is required
-#    用于发送 Telegram 通知
-#    Required for Telegram delivery
-
-telegram:
-  token: "YOUR_TELEGRAM_BOT_TOKEN"
-  chatId: "123456789"
-
-
-
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │                    高级配置 (可选) / Advanced Settings (Optional)             │
-# └─────────────────────────────────────────────────────────────────────────────┘
-
-# 通知冷却时间 / Notification Cooldown (秒 / seconds)
-# ─────────────────────────────────────────────────────
-# 同一交易对在冷却时间内不会重复通知
-# Same trading pair won't trigger repeated notifications within cooldown period
-# 避免短时间内收到大量相同通知
-# Prevents notification spam
-#
-# notificationCooldown: 300    # 默认 5 分钟 / Default 5 minutes
-
-
-# 优先级阈值 / Priority Thresholds (百分比 / Percentage)
-# ───────────────────────────────────────────────────────
-# 根据价格变化幅度设置通知优先级
-# Set notification priority based on price change magnitude
-# 高优先级通知会绕过冷却时间限制
-# High priority notifications bypass cooldown limits
-#
-# priorityThresholds:
-#   low: 0.5       # 低优先级阈值 / Low priority threshold
-#   medium: 1      # 中优先级阈值 / Medium priority threshold
-#   high: 3        # 高优先级阈值 / High priority threshold
-
-
-# 日志级别 / Log Level
-# ─────────────────────
-# 可选值 / Options: "DEBUG", "INFO", "WARNING", "ERROR"
-#
-# logLevel: "INFO"
-
-
-# Auto 模式监控币数量 / Auto mode symbol count
-# ──────────────────────────────────────────────
-# notificationSymbols 为 "auto" 时，获取成交量排名前 N 的交易对
-# When notificationSymbols is "auto", fetches top N pairs by volume
-#
-# autoModeLimit: 50        # 默认 50 / Default 50
-
-
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │               实时异动检测 / Real-time Anomaly Detection                      │
-# └─────────────────────────────────────────────────────────────────────────────┘
-
-# 价格加速度检测 / Price Velocity Detection
-# ──────────────────────────────────────────
-# 在每个 WebSocket tick 上检测快速价格变动（不依赖 checkInterval）
-# Detects rapid price moves on every WebSocket tick (independent of checkInterval)
-#
-# priceVelocity:
-#   enabled: true
-#   windows:                  # 多时间窗口配置 / Multi-window config
-#     - seconds: 30           # 30 秒内变化超过 0.5% / 0.5% change in 30s
-#       threshold: 0.5
-#     - seconds: 60           # 60 秒内变化超过 0.8%
-#       threshold: 0.8
-#     - seconds: 120          # 120 秒内变化超过 1.2%
-#       threshold: 1.2
-#   cooldownSeconds: 60       # 同一币种+窗口的冷却时间 / Per-symbol+window cooldown
-
-# 成交量异动检测 / Volume Spike Detection
-# ────────────────────────────────────────
-# 检测成交量突然激增（量在价先信号）
-# Detects sudden volume surges (volume precedes price signal)
-#
-# volumeSpike:
-#   enabled: true
-#   multiplier: 3.0           # 当前分钟均量 / 历史均量 >= 3x 触发
-#                              # Triggers when recent avg / window avg >= 3x
-#   windowMinutes: 10          # 对比窗口长度 / Comparison window length
-#   minNotifyInterval: "2m"    # 同一币种通知间隔 / Per-symbol notify interval
-
+  # 同 symbol 最小推送间隔 (分钟) / Min interval between signals for same symbol
+  # 避免同一币短时间内反复推送 / Prevents spam from same coin
+  symbolCooldownMinutes: 30
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 📝 额外说明 / Additional Notes:
-#    • 默认会监控支持的 USDT 合约交易对
-#      Default monitors supported USDT perpetual futures
-#    • notificationSymbols 为空或缺省时会推送全部交易对
-#      Empty notificationSymbols will push all trading pairs
-#    • 缓存系统与错误处理在代码中默认启用，无需单独配置
-#      Caching and error handling are enabled by default in code
+# 价格异动探测器 / Price Velocity Detector
 # ═══════════════════════════════════════════════════════════════════════════════
+priceVelocity:
+  enabled: true
+
+  # 检测窗口 / Detection windows
+  # seconds: 时间窗口 / Time window
+  # threshold: 触发阈值 (%) / Trigger threshold (%)
+  windows:
+    - seconds: 30
+      threshold: 0.5
+    - seconds: 60
+      threshold: 0.8
+    - seconds: 120
+      threshold: 1.2
+
+  # 同 symbol+window 重复通知间隔 (秒) / Cooldown per symbol+window (seconds)
+  cooldownSeconds: 60
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 成交量异动探测器 / Volume Spike Detector
+# ═══════════════════════════════════════════════════════════════════════════════
+volumeSpike:
+  enabled: true
+
+  # 触发倍数: 近期成交量 / 历史均量 / Trigger ratio: recent / baseline
+  multiplier: 3.0
+
+  # 对比窗口 (分钟) / Baseline window (minutes)
+  windowMinutes: 10
+
+  # 同 symbol 最小通知间隔 / Min interval between notifications per symbol
+  # 支持格式 / Supported formats: "30s", "2m", "1h"
+  minNotifyInterval: "2m"

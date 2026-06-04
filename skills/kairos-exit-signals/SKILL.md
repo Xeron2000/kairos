@@ -31,28 +31,19 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 检查出场信号
-kairos exit --symbol BTC/USDT
+```
+MCP tool: check_exit_signals
+参数: symbol (string)
 
-# 输出示例
-# 🚨 Exit Signal Analysis: BTC/USDT
-# ============================================================
-# 📊 Current Position: LONG
-# 💰 Entry Price: 65,000
-# 📈 Current Price: 68,500 (+5.4%)
-# 🎯 Unrealized PnL: +5.4%
-#
-# ⚠️ Exit Signals:
-#   [!] 全包回来：大阴线吞没昨日涨幅
-#   [ ] 该突破不突破：结构正常
-#   [ ] 丧失龙头地位：仍是龙头
-#   [ ] 大盘见顶：BTC仍在上涨
-#
-# 🎯 Recommendation: 考虑减仓
-#   Reason: 出现全包回来信号
-#   Action: 减仓50%，保留底仓
-#   Stop Loss: 上移至成本价
+返回示例:
+  symbol: BTC/USDT
+  position: LONG
+  entry_price: 65000
+  current_price: 68500
+  pnl_pct: 5.4
+  signals: ["全包回来"]
+  recommendation: 考虑减仓
+  action: 减仓50%
 ```
 
 ## 出场信号类型
@@ -141,7 +132,7 @@ kairos exit --symbol BTC/USDT
 ## LLM判断流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos exit --symbol BTC/USDT` 获取出场分析
+1. 调用 MCP tool `check_exit_signals` 获取出场分析
 2. 检查是否出现出场信号
 3. 评估持仓风险
 4. 决定平仓时机和仓位

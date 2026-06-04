@@ -31,32 +31,23 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 检测箱体模式
-kairos box-detect --symbol BTC/USDT --timeframe 15m
+```
+MCP tool: detect_box_pattern
+参数: symbol (string), timeframe (string)
 
-# 输出示例
-# 📦 Box Pattern Detection: BTC/USDT
-# ============================================================
-# ⏱️  Timeframe: 15m
-# 📊 Lookback: 100 bars
-#
-# ✅ Box Pattern Detected!
-#
-# 📐 Box Parameters:
-#   High: 68,500.00
-#   Low: 67,200.00
-#   Height: 1,300.00 (1.94%)
-#
-# 📊 Pattern Quality:
-#   Touch High: 3
-#   Touch Low: 4
-#   Second Test High: ✅
-#   Second Test Low: ✅
-#   Convergence: 85%
-#   Volume Declining: ✅
-#
-# 🎯 Status: CONVERGING (Ready for breakout)
+返回示例:
+  detected: true
+  box_high: 68500.00
+  box_low: 67200.00
+  box_height: 1300.00
+  box_height_pct: 1.94
+  touch_high: 3
+  touch_low: 4
+  second_test_high: true
+  second_test_low: true
+  convergence: 85%
+  volume_declining: true
+  status: CONVERGING
 ```
 
 ## 箱体识别算法
@@ -100,7 +91,7 @@ kairos box-detect --symbol BTC/USDT --timeframe 15m
 ## LLM确认流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos box-detect` 获取算法结果
+1. 调用 MCP tool `detect_box_pattern` 获取算法结果
 2. 确认箱体结构是否有效
 3. 评估收敛程度和突破概率
 4. 制定交易计划（进场、止损、目标）

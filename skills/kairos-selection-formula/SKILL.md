@@ -29,29 +29,11 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 扫描符合完美公式的标的
-kairos scan --formula perfect
+```
+MCP tool: scan_symbols
+参数: formula="perfect"
 
-# 输出示例
-# 🎯 Perfect Formula Scan
-# ============================================================
-# 📊 Market Cycle: SPRING (牛市初期)
-# 📈 BTC Trend: Up (+15.2% 30d)
-#
-# 🎯 Perfect Candidates:
-# ------------------------------------------------------------
-# Symbol    Score  Box    Space  Resonance  Age   Volume
-# ------------------------------------------------------------
-# SOL/USDT  95     90%    85%    95%        180d  $2.5B
-# AVAX/USDT 88     85%    80%    90%        120d  $800M
-#
-# 💡 Top Pick: SOL/USDT
-#   - 箱体收敛: 90%
-#   - 上方空间: 85% (无压力)
-#   - 大盘共振: 95%
-#   - 次新币: 180天
-#   - 成交量: $2.5B
+返回: 按完美公式评分排序的候选列表
 ```
 
 ## 量化筛选条件
@@ -119,7 +101,7 @@ kairos scan --formula perfect
 ## LLM分析流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos scan --formula perfect` 获取候选池
+1. 调用 MCP tool `scan_symbols(formula="perfect")` 获取候选池
 2. 对每个候选进行深度分析
 3. 评估是否符合完美公式
 4. 制定交易计划（进场、止损、目标）

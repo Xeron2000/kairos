@@ -55,7 +55,7 @@ class MarketCycle:
 class CycleDetector:
     """Detects market cycle phase using quantitative indicators."""
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict | None = None):
         self.logger = logging.getLogger("kairos.analysis.cycle")
         config = config or {}
 

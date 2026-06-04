@@ -30,25 +30,14 @@ kairos选币公式：
 
 ## CLI命令
 
-```bash
-# 扫描潜在标的
-kairos scan --exchange okx --min-volume 80000000
+```
+MCP tool: scan_symbols
+参数: exchange (string，可选), min_volume (number，可选)
 
-# 输出示例
-# 🔍 Scanning okx for potential symbols...
-# ============================================================
-# 📋 Filter Criteria:
-#   Min 24h Volume: $80,000,000
-#   Min Open Interest: $25,000,000
-#   Min Listing Age: 45 days
-#   Max Volatility: 6.0%
-#
-# 🎯 Top Candidates:
-# ------------------------------------------------------------
-# Symbol                   Volume              OI      Age     Vol%
-# ------------------------------------------------------------
-# SOL/USDT                  $2.5B           $850M     180d     4.2%
-# AVAX/USDT                 $800M           $320M     120d     5.1%
+返回示例:
+  symbols: [...]
+  total: 25
+  filters: { min_volume: 80000000, exchange: "okx" }
 ```
 
 ## 量化筛选条件
@@ -88,7 +77,7 @@ kairos scan --exchange okx --min-volume 80000000
 ## LLM分析流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos scan` 获取候选池
+1. 调用 MCP tool `scan_symbols` 获取候选池
 2. 分析每个币种的日线结构
 3. 检查上方是否有压力
 4. 评估与大盘的相关性

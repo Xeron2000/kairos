@@ -30,32 +30,20 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 检查加仓条件
-kairos pyramiding --symbol BTC/USDT
+```
+MCP tool: check_pyramiding
+参数: symbol (string)
 
-# 输出示例
-# 📈 Pyramiding Analysis: BTC/USDT
-# ============================================================
-# 📊 Current Position: LONG
-# 💰 Entry Price: 65,000
-# 📈 Current Price: 68,500 (+5.4%)
-# 🎯 Unrealized PnL: +5.4%
-#
-# ✅ Pyramiding Conditions:
-#   [✓] 已有底仓
-#   [✓] 底仓有利润
-#   [✓] 趋势明确
-#   [✓] 结构完美
-#
-# 🎯 Pyramiding Signal:
-#   Type: 二次突破
-#   Entry: 69,000 (突破确认)
-#   Stop Loss: 67,500 (前低)
-#   Position Size: 30% of original
-#   Risk/Reward: 3:1
-#
-# ⚠️ Warning: 加仓风险较高，严格止损
+返回示例:
+  symbol: BTC/USDT
+  position: LONG
+  entry_price: 65000
+  current_price: 68500
+  pnl_pct: 5.4
+  conditions_met: ["已有底仓", "底仓有利润", ...]
+  signal: 二次突破
+  suggested_entry: 69000
+  stop_loss: 67500
 ```
 
 ## 加仓条件
@@ -142,7 +130,7 @@ kairos pyramiding --symbol BTC/USDT
 ## LLM判断流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos pyramiding --symbol BTC/USDT` 获取加仓分析
+1. 调用 MCP tool `check_pyramiding` 获取加仓分析
 2. 检查是否满足加仓条件
 3. 寻找加仓时机
 4. 计算加仓仓位

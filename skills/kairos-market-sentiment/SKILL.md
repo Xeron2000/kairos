@@ -31,28 +31,19 @@ metadata:
 
 ## CLI命令
 
-```bash
-# 查看市场氛围
-kairos sentiment
+```
+MCP tool: get_market_sentiment
+参数: 无
 
-# 输出示例
-# 🌡️ Market Sentiment Analysis
-# ============================================================
-# 📊 Overall Sentiment: BULLISH (看涨)
-# 💰 Money Effect: STRONG (强赚钱效应)
-# 📈 Trend Clarity: HIGH (趋势清晰)
-# 🔄 Rotation Speed: SLOW (轮动慢)
-#
-# 📊 Indicators:
-#   BTC Dominance: 58% (高)
-#   Altcoin Season Index: 45 (中等)
-#   Fear & Greed: 72 (贪婪)
-#   Funding Rate: 0.015% (正常偏高)
-#
-# 🎯 Implications:
-#   - 赚钱效应强，可以积极操作
-#   - 聚焦龙头币，避免补涨币
-#   - 保持正常仓位，注意风险
+返回示例:
+  sentiment: BULLISH
+  money_effect: STRONG
+  trend_clarity: HIGH
+  rotation: SLOW
+  btc_dominance: 58
+  altcoin_season_index: 45
+  fear_and_greed: 72
+  funding_rate: 0.015
 ```
 
 ## 市场氛围指标
@@ -118,7 +109,7 @@ kairos sentiment
 ## LLM判断流程
 
 hermes agent使用此skill时：
-1. 调用 `kairos sentiment` 获取市场氛围分析
+1. 调用 MCP tool `get_market_sentiment` 获取市场氛围分析
 2. 评估赚钱效应强度
 3. 判断资金合力方向
 4. 决定交易频率和仓位

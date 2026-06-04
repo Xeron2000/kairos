@@ -4,39 +4,11 @@
 
 Crypto futures trading signal harness for Hermes Agent. Based on Bit浪浪's trading philosophy.
 
-> 复制下面这段文字发给你的 Hermes Agent。它会自动完成 kairos 的安装、配置和启动。
+> 复制下面这句话发给 Hermes Agent，它会自动完成安装配置：
 
-```
-请帮我安装并配置 kairos 加密货币交易信号 harness。按顺序执行：
+> 请帮我安装并配置 kairos 加密货币交易信号 harness。按顺序执行：克隆仓库 `git clone https://github.com/Xeron2000/kairos ~/kairos` 并 `cd ~/kairos && uv sync`；复制技能 `cp -r ~/kairos/skills/kairos-* ~/.hermes/skills/kairos/`；编辑 `~/.hermes/config.yaml` 的 skills.external_dirs 加上 `~/.hermes/skills/kairos`；用 `echo 'Y' | hermes webhook subscribe --name kairos-signals --url /webhooks/kairos-signals --prompt "你是交易信号过滤器。收到kairos推送的SignalEvent后：1.无意义/重复信号回复「静默」2.有价值的信号调用kairos MCP工具深度分析3.确认的高质量信号推送Telegram。详细规则见kairos-harness技能。" --delivery telegram` 创建 webhook 订阅并记下 secret；用 `echo 'Y' | hermes mcp add kairos --command ~/kairos/run.sh --env KAIROS_WEBHOOK_SECRET=<secret>` 注册 MCP 服务；`systemctl --user restart hermes-gateway` 重启 gateway；完成后告诉我是否成功。
 
-1. 克隆仓库并安装依赖：
-   git clone https://github.com/Xeron2000/kairos ~/kairos 2>/dev/null || true
-   cd ~/kairos && uv sync
-
-2. 复制技能文件到 Hermes 技能目录：
-   mkdir -p ~/.hermes/skills/kairos
-   cp -r ~/kairos/skills/kairos-* ~/.hermes/skills/kairos/
-
-3. 编辑 ~/.hermes/config.yaml，在 skills 段修改 external_dirs 为：
-   external_dirs: [~/.hermes/skills/kairos]
-
-4. 创建 webhook 订阅（如果还没有的话，先运行 hermes webhook list 检查）：
-   如果没有 kairos-signals 订阅，运行：
-   echo 'Y' | hermes webhook subscribe --name kairos-signals --url /webhooks/kairos-signals --prompt "你是交易信号过滤器。收到kairos推送的SignalEvent后：1.无意义/重复信号回复「静默」2.有价值的信号调用kairos MCP工具深度分析3.确认的高质量信号推送Telegram。详细规则见kairos-harness技能。" --delivery telegram
-   记下输出的 secret 密钥。
-
-5. 注册 kairos 为 MCP 服务（把 YOUR_SECRET 替换为上一步的密钥）：
-   echo 'Y' | hermes mcp add kairos --command ~/kairos/run.sh --env KAIROS_WEBHOOK_SECRET=YOUR_SECRET
-
-6. 重启 gateway 加载 MCP 工具：
-   systemctl --user restart hermes-gateway
-
-7. 验证工具可用（会列出 10 个 kairos 工具）：
-   sleep 3 && tail -5 ~/.hermes/logs/gateway.log
-
-完成后告诉我是否成功。"```
-
-先决条件：服务器已安装 `git`、`uv`，且 Hermes 已配置 Telegram 和 webhook 平台。
+<details><summary>先决条件</summary>服务器已安装 `git`、`uv`，且 Hermes 已配置 Telegram 和 webhook 平台。</details>
 
 ## Architecture
 

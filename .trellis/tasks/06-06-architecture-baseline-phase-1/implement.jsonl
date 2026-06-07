@@ -1,0 +1,9 @@
+{"file": "docs/architecture.md", "reason": "Authoritative architecture baseline for scanner-first MCP, scoring, config, risk, storage, chart, webhook, and non-execution boundaries."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec entry point for applicable implementation guidelines."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Current Kairos module layout and architecture drift notes."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Project quality rules, type annotations, testing expectations, and no fake market data constraint."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error propagation and graceful degradation expectations for partial scanner failures."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Storage section is part of the first-phase config surface even though persistence is mostly out of scope."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Logging expectations for scanner warnings and failures."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer and code-reuse thinking applies to MCP schema/config/scanner changes."}
+{"file": ".trellis/tasks/06-06-architecture-baseline/research/best-practices.md", "reason": "Prior recorded research supporting schema stability, retries, and signal-vs-execution boundaries."}

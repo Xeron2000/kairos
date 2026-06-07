@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/backend/index.md","reason":"Backend spec entrypoint and quality checklist for verification."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Coverage, mock boundaries, and anti-tautological-test rules for reviewing added tests."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify failure branches expose useful errors and do not silently swallow critical paths."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Verify new logging/error handling follows backend conventions without leaking secrets."}
+{"file":".trellis/spec/backend/mcp-scanner-contracts.md","reason":"Verify MCP scanner and symbol contracts remain aligned after mcp_server fixes."}
+{"file":"docs/architecture.md","reason":"Verify implementation stays within signal/MCP boundary and does not add out-of-scope execution behavior."}

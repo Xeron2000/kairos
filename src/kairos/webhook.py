@@ -54,6 +54,8 @@ class SignalEvent:
             "price": self.price,
             "condition": self.condition,
             "exchange": self.exchange,
+            "change_pct": self.change_pct,
+            "severity": self.severity,
         }
 
 

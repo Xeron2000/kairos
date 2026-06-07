@@ -10,6 +10,7 @@ import numpy as np
 @dataclass
 class PriceLevel:
     """Represents a support or resistance level."""
+
     price: float
     level_type: str  # "support" or "resistance"
     strength: int  # 1-5, how many times tested
@@ -46,7 +47,7 @@ class SupportResistance:
         closes: np.ndarray,
         volumes: np.ndarray,
         timestamps: np.ndarray,
-        current_price: float
+        current_price: float,
     ) -> dict:
         """Find support and resistance levels."""
         # Find pivot points
@@ -54,12 +55,8 @@ class SupportResistance:
         pivots_low = self._find_pivot_lows(lows)
 
         # Cluster nearby levels
-        resistance_levels = self._cluster_levels(
-            pivots_high, highs, volumes, timestamps, "resistance"
-        )
-        support_levels = self._cluster_levels(
-            pivots_low, lows, volumes, timestamps, "support"
-        )
+        resistance_levels = self._cluster_levels(pivots_high, highs, volumes, timestamps, "resistance")
+        support_levels = self._cluster_levels(pivots_low, lows, volumes, timestamps, "support")
 
         # Add round number levels
         round_levels = self._find_round_numbers(current_price)
@@ -79,14 +76,14 @@ class SupportResistance:
             "support_levels": support_levels[:5],  # Top 5
             "nearest_resistance": nearest_resistance,
             "nearest_support": nearest_support,
-            "round_numbers": round_levels
+            "round_numbers": round_levels,
         }
 
     def _find_pivot_highs(self, highs: np.ndarray, window: int = 5) -> list[tuple[int, float]]:
         """Find pivot high points."""
         pivots = []
         for i in range(window, len(highs) - window):
-            if highs[i] == max(highs[i-window:i+window+1]):
+            if highs[i] == max(highs[i - window : i + window + 1]):
                 pivots.append((i, highs[i]))
         return pivots
 
@@ -94,7 +91,7 @@ class SupportResistance:
         """Find pivot low points."""
         pivots = []
         for i in range(window, len(lows) - window):
-            if lows[i] == min(lows[i-window:i+window+1]):
+            if lows[i] == min(lows[i - window : i + window + 1]):
                 pivots.append((i, lows[i]))
         return pivots
 
@@ -104,7 +101,7 @@ class SupportResistance:
         prices: np.ndarray,
         volumes: np.ndarray,
         timestamps: np.ndarray,
-        level_type: str
+        level_type: str,
     ) -> list[PriceLevel]:
         """Cluster nearby pivot points into levels."""
         if not pivots:
@@ -143,7 +140,7 @@ class SupportResistance:
         prices: np.ndarray,
         volumes: np.ndarray,
         timestamps: np.ndarray,
-        level_type: str
+        level_type: str,
     ) -> PriceLevel:
         """Create a PriceLevel from a cluster of pivots."""
         # Average price of cluster
@@ -158,7 +155,7 @@ class SupportResistance:
         last_idx = cluster[-1][0]
 
         # Average volume at this level
-        avg_volume = np.mean(volumes[first_idx:last_idx+1]) if last_idx < len(volumes) else 0
+        avg_volume = np.mean(volumes[first_idx : last_idx + 1]) if last_idx < len(volumes) else 0
 
         return PriceLevel(
             price=float(avg_price),
@@ -170,12 +167,7 @@ class SupportResistance:
             volume_at_level=float(avg_volume),
         )
 
-    def _filter_levels(
-        self,
-        levels: list[PriceLevel],
-        current_price: float,
-        level_type: str
-    ) -> list[PriceLevel]:
+    def _filter_levels(self, levels: list[PriceLevel], current_price: float, level_type: str) -> list[PriceLevel]:
         """Filter and sort levels by relevance."""
         if level_type == "resistance":
             # Only keep levels above current price
@@ -189,12 +181,7 @@ class SupportResistance:
 
         return levels
 
-    def _find_nearest(
-        self,
-        levels: list[PriceLevel],
-        current_price: float,
-        level_type: str
-    ) -> Optional[PriceLevel]:
+    def _find_nearest(self, levels: list[PriceLevel], current_price: float, level_type: str) -> Optional[PriceLevel]:
         """Find nearest level."""
         if not levels:
             return None
@@ -226,13 +213,7 @@ class SupportResistance:
 
         return round_levels
 
-    def calculate_risk_reward(
-        self,
-        entry_price: float,
-        stop_loss: float,
-        take_profit: float,
-        side: str
-    ) -> dict:
+    def calculate_risk_reward(self, entry_price: float, stop_loss: float, take_profit: float, side: str) -> dict:
         """Calculate risk/reward ratio."""
         if side == "long":
             risk = entry_price - stop_loss
@@ -251,5 +232,5 @@ class SupportResistance:
             "reward": reward,
             "risk_pct": (risk / entry_price * 100),
             "reward_pct": (reward / entry_price * 100),
-            "rr_ratio": rr_ratio
+            "rr_ratio": rr_ratio,
         }

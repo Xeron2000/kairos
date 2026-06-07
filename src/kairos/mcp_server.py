@@ -8,10 +8,11 @@ and live exchange data via ccxt REST API when available.
 
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import anyio
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -21,6 +22,8 @@ from mcp.server.fastmcp import FastMCP
 from kairos.analysis.box_pattern import BoxDetector
 from kairos.analysis.cycle import CycleDetector
 from kairos.analysis.support_resistance import SupportResistance
+from kairos.scanner import analyze_symbol_setup as run_analyze_symbol_setup
+from kairos.scanner import scan_market as run_scan_market
 from kairos.utils.blacklist import Blacklist
 
 logging.basicConfig(level=logging.INFO)
@@ -108,6 +111,87 @@ def _funding_rate(symbol: str, exchange_name: str = "okx") -> Optional[float]:
         return None
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Convert exchange payload values to float without raising."""
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_usdt_symbol(symbol: str, market: dict[str, Any]) -> bool:
+    """Return True for active USDT derivative markets accepted by the legacy scanner tool."""
+    if not isinstance(symbol, str):
+        return False
+    if market.get("active") is False or market.get("spot") is True or market.get("type") == "spot":
+        return False
+    quote = str(market.get("quote") or "").upper()
+    settle = str(market.get("settle") or "").upper()
+    has_derivative_flags = any(key in market for key in ("swap", "future", "contract", "linear"))
+    if has_derivative_flags and not (market.get("swap") or market.get("future") or market.get("contract")):
+        return False
+    if market.get("linear") is False:
+        return False
+    return quote == "USDT" or settle == "USDT" or symbol.endswith("/USDT") or symbol.endswith("/USDT:USDT")
+
+
+def _market_age_days(market: dict[str, Any]) -> Optional[float]:
+    """Best-effort listing age from common exchange metadata fields."""
+    info_payload = market.get("info")
+    info: dict[str, Any] = info_payload if isinstance(info_payload, dict) else {}
+    timestamp = (
+        market.get("created")
+        or market.get("timestamp")
+        or market.get("listedAt")
+        or market.get("listingTime")
+        or info.get("created")
+        or info.get("timestamp")
+        or info.get("listedAt")
+        or info.get("listingTime")
+        or info.get("listTime")
+        or info.get("launchTime")
+        or info.get("onboardDate")
+        or info.get("openTime")
+    )
+    if timestamp is None:
+        return None
+
+    ts = _safe_float(timestamp, -1.0)
+    if ts < 0:
+        return None
+    if ts > 10_000_000_000:  # millisecond timestamps are common in exchange payloads
+        ts /= 1000
+    age_seconds = datetime.now(timezone.utc).timestamp() - ts
+    return max(0.0, age_seconds / 86_400)
+
+
+def _open_interest(exchange_client: Any, symbol: str, ticker: dict[str, Any]) -> float:
+    """Fetch or extract open interest for scan filtering."""
+    for key in ("openInterestValue", "openInterestAmount", "openInterest"):
+        value = _safe_float(ticker.get(key), 0.0)
+        if value:
+            return value
+
+    has_payload = getattr(exchange_client, "has", {})
+    has = has_payload if isinstance(has_payload, dict) else {}
+    if not has.get("fetchOpenInterest") or not hasattr(exchange_client, "fetch_open_interest"):
+        return 0.0
+
+    try:
+        info = exchange_client.fetch_open_interest(symbol) or {}
+    except Exception as exc:
+        logger.debug("Failed to fetch open interest for %s: %s", symbol, exc)
+        return 0.0
+
+    for key in ("openInterestValue", "openInterestAmount", "openInterest"):
+        value = _safe_float(info.get(key), 0.0)
+        if value:
+            return value
+    return 0.0
+
+
 # ── State ──────────────────────────────────────────────────────────────────
 
 
@@ -132,6 +216,18 @@ state = KairosState()
 
 
 # ── MCP Tools ───────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def scan_market(exchange: str = "") -> Dict[str, Any]:
+    """Run scanner-first market discovery and deterministic setup analysis."""
+    return run_scan_market(exchange=exchange or None)
+
+
+@mcp.tool()
+def analyze_symbol_setup(symbol: str, exchange: str = "") -> Dict[str, Any]:
+    """Analyze one symbol with the scanner setup logic."""
+    return run_analyze_symbol_setup(symbol=symbol, exchange=exchange or None)
 
 
 @mcp.tool()
@@ -296,18 +392,43 @@ def scan_symbols(
         if not ex:
             return {"success": False, "error": f"Cannot connect to {exchange}"}
 
-        markets = ex.exchange.load_markets()
-        usdt_symbols = [s for s in markets if s.endswith("/USDT")]
+        markets = ex.exchange.load_markets() or {}
+        usdt_symbols = []
+        for scan_symbol, scan_market_info in markets.items():
+            market_info = scan_market_info if isinstance(scan_market_info, dict) else {}
+            if _is_usdt_symbol(scan_symbol, market_info):
+                usdt_symbols.append(scan_symbol)
 
         candidates = []
-        for symbol in usdt_symbols[:100]:
+        warnings = []
+        min_age_supported = 0
+        min_age_unsupported = 0
+
+        for symbol in usdt_symbols:
             try:
-                ticker = ex.exchange.fetch_ticker(symbol)
-                vol = ticker.get("quoteVolume") or 0
-                price = ticker.get("last", 0)
-                change = ticker.get("percentage") or 0
+                market_payload = markets.get(symbol)
+                market: dict[str, Any] = market_payload if isinstance(market_payload, dict) else {}
+                ticker_payload = ex.exchange.fetch_ticker(symbol)
+                ticker: dict[str, Any] = ticker_payload if isinstance(ticker_payload, dict) else {}
+                vol = _safe_float(ticker.get("quoteVolume") or ticker.get("baseVolume"), 0.0)
+                price = _safe_float(ticker.get("last") or ticker.get("close"), 0.0)
+                change = _safe_float(ticker.get("percentage"), 0.0)
+                open_interest = _open_interest(ex.exchange, symbol, ticker)
+                age_days = _market_age_days(market)
+
+                if min_age > 0:
+                    if age_days is None:
+                        min_age_unsupported += 1
+                    else:
+                        min_age_supported += 1
+                        if age_days < min_age:
+                            continue
 
                 if vol < min_volume:
+                    continue
+                if open_interest < min_oi:
+                    continue
+                if abs(change) > max_volatility:
                     continue
 
                 score = None
@@ -322,14 +443,22 @@ def scan_symbols(
                     {
                         "symbol": symbol,
                         "volume_24h": vol,
-                        "open_interest": ticker.get("openInterest") or 0,
+                        "open_interest": open_interest,
+                        "age_days": round(age_days, 1) if age_days is not None else None,
                         "price": price,
                         "change_24h_pct": change,
                         "score": score if formula == "perfect" else None,
                     }
                 )
-            except Exception:
+            except Exception as exc:
+                logger.debug("Skipping %s during scan: %s", symbol, exc)
                 continue
+
+        if min_age > 0 and min_age_unsupported:
+            warnings.append(
+                "min_age is unsupported for symbols without listing metadata; "
+                f"{min_age_unsupported} symbol(s) were not age-filtered."
+            )
 
         candidates.sort(key=lambda x: x["volume_24h"], reverse=True)
         candidates = candidates[:20]
@@ -345,10 +474,13 @@ def scan_symbols(
                 "max_volatility": max_volatility,
                 "formula": formula,
             },
+            "warnings": warnings,
             "candidates": candidates,
             "summary": {
                 "total_scanned": len(usdt_symbols),
                 "passed_filters": len(candidates),
+                "min_age_supported": min_age_supported,
+                "min_age_unsupported": min_age_unsupported,
             },
         }
     except Exception as e:
@@ -387,12 +519,10 @@ def detect_signal(
             box = boxes[0] if boxes else None
 
         # Detect SR
-        # SR levels available for downstream consumers via the result dict
-        sr_result: dict = {"resistance_levels": [], "support_levels": []}
         if ohlcv:
             try:
                 sr = SupportResistance()
-                sr_result = sr.find_levels(
+                sr.find_levels(
                     symbol=symbol,
                     highs=ohlcv["highs"],
                     lows=ohlcv["lows"],
@@ -712,32 +842,26 @@ def main():
     import sys
 
     from kairos.config import load_config
+    from kairos.data.data_manager import DataManager
 
     print("Starting Kairos MCP Server...", file=sys.stderr)
 
     try:
         config = load_config()
     except Exception:
-        import logging
-
         logging.getLogger("kairos").warning("Config load failed — using defaults")
         config = {}
-
-    import anyio
-
-    from kairos.data.data_manager import DataManager
 
     dm = DataManager(config)
 
     async def _main():
-        await dm.start()
-        await mcp.run_stdio_async()
+        try:
+            await dm.start()
+            await mcp.run_stdio_async()
+        finally:
+            await dm.stop()
 
     try:
         anyio.run(_main)
     except KeyboardInterrupt:
         print("\nShutting down...", file=sys.stderr)
-    finally:
-        import asyncio as _asyncio
-
-        _asyncio.run(dm.stop())

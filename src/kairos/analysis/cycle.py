@@ -9,6 +9,7 @@ import numpy as np
 
 class MarketPhase(str, Enum):
     """Market phases (春夏秋冬)."""
+
     SPRING = "spring"  # 牛市初期，行情启动
     SUMMER = "summer"  # 主升浪狂热期
     AUTUMN = "autumn"  # 高位震荡，补涨期
@@ -18,6 +19,7 @@ class MarketPhase(str, Enum):
 @dataclass
 class MarketCycle:
     """Represents current market cycle state."""
+
     phase: MarketPhase
     confidence: float  # 0-1 confidence in phase detection
     btc_trend: str  # "up", "down", "sideways"
@@ -36,7 +38,7 @@ class MarketCycle:
             MarketPhase.SPRING: "行情启动期，百花齐放，开始试仓",
             MarketPhase.SUMMER: "主升浪狂热期，聚焦龙头，重仓出击",
             MarketPhase.AUTUMN: "高位震荡期，补涨行情，收缩防守",
-            MarketPhase.WINTER: "下跌震荡期，空仓冬眠，管住手"
+            MarketPhase.WINTER: "下跌震荡期，空仓冬眠，管住手",
         }
         return descriptions.get(self.phase, "未知")
 
@@ -47,7 +49,7 @@ class MarketCycle:
             MarketPhase.SPRING: "开始建仓，正常杠杆",
             MarketPhase.SUMMER: "重仓出击，激进杠杆",
             MarketPhase.AUTUMN: "轻仓防守，保守杠杆",
-            MarketPhase.WINTER: "空仓等待，无杠杆"
+            MarketPhase.WINTER: "空仓等待，无杠杆",
         }
         return advice.get(self.phase, "观望")
 
@@ -77,7 +79,7 @@ class CycleDetector:
         btc_volumes: np.ndarray,
         altcoin_correlation: float = 0.8,
         avg_funding_rate: float = 0.01,
-        total_market_cap_change_30d: float = 0
+        total_market_cap_change_30d: float = 0,
     ) -> MarketCycle:
         """Detect current market phase."""
         if len(btc_prices) < 30:
@@ -92,9 +94,13 @@ class CycleDetector:
 
         # Phase detection logic
         phase, confidence = self._determine_phase(
-            btc_change_7d, btc_change_30d, volatility,
-            volume_trend, altcoin_correlation, avg_funding_rate,
-            total_market_cap_change_30d
+            btc_change_7d,
+            btc_change_30d,
+            volatility,
+            volume_trend,
+            altcoin_correlation,
+            avg_funding_rate,
+            total_market_cap_change_30d,
         )
 
         return MarketCycle(
@@ -107,7 +113,7 @@ class CycleDetector:
             volume_trend=volume_trend,
             altcoin_correlation=altcoin_correlation,
             funding_rates_avg=avg_funding_rate,
-            market_cap_change_30d=total_market_cap_change_30d
+            market_cap_change_30d=total_market_cap_change_30d,
         )
 
     def _calculate_change(self, prices: np.ndarray, days: int) -> float:
@@ -131,7 +137,7 @@ class CycleDetector:
             return "stable"
 
         recent_avg = np.mean(volumes[-period:])
-        prior_avg = np.mean(volumes[-period*2:-period])
+        prior_avg = np.mean(volumes[-period * 2 : -period])
 
         if recent_avg > prior_avg * 1.2:
             return "increasing"
@@ -162,15 +168,10 @@ class CycleDetector:
         volume_trend: str,
         altcoin_corr: float,
         funding_rate: float,
-        mcap_change_30d: float
+        mcap_change_30d: float,
     ) -> tuple[MarketPhase, float]:
         """Determine market phase based on indicators."""
-        scores = {
-            MarketPhase.SPRING: 0,
-            MarketPhase.SUMMER: 0,
-            MarketPhase.AUTUMN: 0,
-            MarketPhase.WINTER: 0
-        }
+        scores = {MarketPhase.SPRING: 0, MarketPhase.SUMMER: 0, MarketPhase.AUTUMN: 0, MarketPhase.WINTER: 0}
 
         # BTC 30-day change signals
         if btc_30d > self.summer_btc_change_min:
@@ -241,5 +242,5 @@ class CycleDetector:
             volume_trend="stable",
             altcoin_correlation=0,
             funding_rates_avg=0,
-            market_cap_change_30d=0
+            market_cap_change_30d=0,
         )

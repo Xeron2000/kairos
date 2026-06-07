@@ -1367,8 +1367,11 @@ name = "kairos"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "ccxt" },
     { name = "expiringdict" },
+    { name = "httpx" },
+    { name = "mcp" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "psutil" },
@@ -1393,10 +1396,7 @@ dev = [
     { name = "safety" },
 ]
 hermes = [
-    { name = "httpx" },
-    { name = "mcp" },
     { name = "mplfinance" },
-    { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
@@ -1414,11 +1414,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.0.0" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.5" },
     { name = "ccxt", specifier = ">=4.1.80" },
     { name = "expiringdict", specifier = ">=1.2.1" },
-    { name = "httpx", marker = "extra == 'hermes'", specifier = ">=0.27.0" },
-    { name = "mcp", marker = "extra == 'hermes'", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
     { name = "mplfinance", marker = "extra == 'hermes'", specifier = ">=0.12.10b0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.1" },
     { name = "numpy", specifier = ">=1.24.0" },
@@ -1434,7 +1435,6 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
     { name = "safety", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "tenacity", specifier = ">=8.0.0" },
-    { name = "tenacity", marker = "extra == 'hermes'", specifier = ">=8.0.0" },
     { name = "websocket-client", specifier = ">=1.8.0" },
     { name = "websockets", specifier = ">=11.0.3" },
 ]

@@ -1,0 +1,8 @@
+{"file": "docs/architecture.md", "reason": "Check implementation against the authoritative first-phase architecture constraints."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec entry point for verification."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Check new modules fit current project layout."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Check type annotations, tests, no fake data, and quality expectations."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check partial-failure and envelope error behavior."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Check storage config changes stay within first-phase persistence scope."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Check scanner logging and warning behavior."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Check cross-layer consistency and reuse concerns."}

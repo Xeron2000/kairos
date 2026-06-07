@@ -54,7 +54,17 @@ class TestSignalEvent:
             condition="breakout_below",
         )
         payload = ev.to_payload()
-        expected_keys = {"event", "event_id", "timestamp", "symbol", "price", "condition", "exchange"}
+        expected_keys = {
+            "event",
+            "event_id",
+            "timestamp",
+            "symbol",
+            "price",
+            "condition",
+            "exchange",
+            "change_pct",
+            "severity",
+        }
         assert set(payload.keys()) == expected_keys
         assert payload["event"] == "price_alert"
         assert payload["symbol"] == "ETH/USDT"
@@ -62,8 +72,8 @@ class TestSignalEvent:
         assert payload["condition"] == "breakout_below"
         assert payload["exchange"] == ""
 
-    def test_to_payload_does_not_leak_internal(self):
-        """to_payload() excludes severity, change_pct — only Hermes-safe fields."""
+    def test_to_payload_includes_signal_strength_fields(self):
+        """to_payload() includes severity and change_pct for Hermes routing."""
         ev = SignalEvent(
             event="price_alert",
             symbol="BNB/USDT",
@@ -73,8 +83,8 @@ class TestSignalEvent:
             change_pct=3.5,
         )
         payload = ev.to_payload()
-        assert "severity" not in payload
-        assert "change_pct" not in payload
+        assert payload["severity"] == "HIGH"
+        assert payload["change_pct"] == 3.5
 
     def test_explicit_event_id(self):
         """Explicit event_id is preserved."""
@@ -167,6 +177,24 @@ class TestSign:
         sig1 = _sign({"event": "a"}, secret)
         sig2 = _sign({"event": "b"}, secret)
         assert sig1 != sig2
+
+    def test_payload_with_severity_change_pct_signature_is_canonical(self):
+        """Canonical HMAC covers severity/change_pct with compact JSON ordering preserved."""
+        secret = "super-secret-key"
+        payload = {
+            "event": "price_alert",
+            "event_id": "evt-1",
+            "timestamp": "2025-01-15T10:30:00+00:00",
+            "symbol": "BTC/USDT:USDT",
+            "price": 68500.0,
+            "condition": "30s_0.5pct",
+            "exchange": "okx",
+            "change_pct": 0.82,
+            "severity": "MEDIUM",
+        }
+        canonical = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        expected = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+        assert _sign(payload, secret) == expected
 
     def test_unicode_payload(self):
         """Payload with unicode characters signed correctly."""

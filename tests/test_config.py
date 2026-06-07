@@ -6,7 +6,7 @@ import logging
 
 import yaml
 
-from kairos.config import _DEFAULT_CONFIG, _deep_merge, load_config
+from kairos.config import _DEFAULT_CONFIG, _deep_merge, load_architecture_config, load_config
 
 
 class TestDeepMerge:
@@ -203,3 +203,53 @@ class TestLoadConfig:
         # Module default must be unchanged
         assert _DEFAULT_CONFIG["exchange"] == "okx"
         assert "newKey" not in _DEFAULT_CONFIG
+
+    def test_load_config_nested_defaults_are_fresh_copies(self):
+        """Nested default sections should not be shared between calls."""
+        from pathlib import Path
+
+        first = load_config(Path("/nonexistent/path/config.yaml"))
+        second = load_config(Path("/nonexistent/path/config.yaml"))
+
+        first["scanner"]["universeSize"] = 999
+
+        assert second["scanner"]["universeSize"] == 30
+        assert _DEFAULT_CONFIG["scanner"]["universeSize"] == 30
+
+
+class TestArchitectureConfig:
+    """Tests for typed architecture config view."""
+
+    def test_architecture_defaults_match_baseline(self):
+        """Default typed config reflects docs/architecture.md phase-one baseline."""
+        cfg = load_architecture_config()
+
+        assert cfg.scanner.interval_seconds == 300
+        assert cfg.scanner.universe_size == 30
+        assert cfg.scanner.candidate_limit == 20
+        assert cfg.scanner.deep_analysis_limit == 10
+        assert cfg.exchanges.primary == "okx"
+        assert cfg.exchanges.backups == ["binance", "bybit"]
+        assert cfg.scoring.minimum_liquidity_quote_volume == 30_000_000.0
+        assert cfg.scoring.cycle_thresholds["winter"] == 7.5
+        assert cfg.risk.max_position_pct["major"] == 33.0
+        assert cfg.risk.max_leverage["altcoin"] == 5.0
+        assert cfg.storage.database_path == "~/.local/share/kairos/kairos.db"
+        assert cfg.storage.retention_days == 90
+        assert cfg.charts.default_chart_count == 1
+        assert cfg.webhook.schema_version == "1.1"
+
+    def test_architecture_config_merges_overrides(self):
+        """Typed config accepts YAML-facing camelCase overrides."""
+        cfg = load_architecture_config(
+            {
+                "scanner": {"universeSize": 12, "deepAnalysisLimit": 4},
+                "scoring": {"minimumRiskReward": 2.5},
+                "storage": {"databasePath": "/tmp/kairos.db"},
+            }
+        )
+
+        assert cfg.scanner.universe_size == 12
+        assert cfg.scanner.deep_analysis_limit == 4
+        assert cfg.scoring.minimum_risk_reward == 2.5
+        assert cfg.storage.database_path == "/tmp/kairos.db"

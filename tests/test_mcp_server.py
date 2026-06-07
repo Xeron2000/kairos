@@ -2,12 +2,22 @@
 
 from unittest.mock import MagicMock, patch
 
-from kairos.mcp_server import check_exit_signals, check_pyramiding, detect_box_pattern, detect_signal, get_market_cycle, scan_symbols
+import numpy as np
+
+from kairos.mcp_server import (
+    analyze_symbol_setup,
+    check_exit_signals,
+    check_pyramiding,
+    detect_box_pattern,
+    detect_signal,
+    get_market_cycle,
+    scan_market,
+    scan_symbols,
+)
 
 
 def _make_mock_ohlcv(price: float = 68500.0, n: int = 30, trend: float = 0.0):
     """Build mock OHLCV data for tests."""
-    import numpy as np
 
     timestamps = np.arange(n, dtype=float) * 3_600_000 + 1_700_000_000_000.0
     base_prices = price + np.arange(n) * trend
@@ -22,7 +32,7 @@ def _make_mock_ohlcv(price: float = 68500.0, n: int = 30, trend: float = 0.0):
 def _make_mock_exchange(price: float = 68500.0, ohlcv_n: int = 30):
     """Create a mock exchange with working REST methods."""
     ex = MagicMock()
-    ex.fetch_ticker.return_value = {"last": price, "quoteVolume": 1e10, "percentage": 2.5}
+    ex.fetch_ticker.return_value = {"last": price, "quoteVolume": 1e10, "percentage": 2.5, "openInterest": 1e9}
     ex.fetch_ohlcv.return_value = _make_mock_ohlcv(price, ohlcv_n)
     ex.load_markets.return_value = {
         "BTC/USDT": {"base": "BTC", "quote": "USDT"},
@@ -33,6 +43,44 @@ def _make_mock_exchange(price: float = 68500.0, ohlcv_n: int = 30):
 
 class TestMCPServer:
     """Test MCP server tools with mocked exchange."""
+
+    def test_scan_market_tool_returns_envelope(self):
+        """scan_market MCP tool delegates to scanner and preserves envelope."""
+        expected = {
+            "success": True,
+            "schema_version": "1.0",
+            "timestamp": "2026-06-06T00:00:00+00:00",
+            "symbol": None,
+            "data": {"candidates": [], "setups": [], "qualified_setups": []},
+            "score": {},
+            "reasons": [],
+            "warnings": [],
+            "errors": [],
+        }
+        with patch("kairos.mcp_server.run_scan_market", return_value=expected) as mock_scan:
+            result = scan_market()
+
+        assert result == expected
+        mock_scan.assert_called_once_with(exchange=None)
+
+    def test_analyze_symbol_setup_tool_returns_envelope(self):
+        """analyze_symbol_setup MCP tool delegates to scanner and preserves envelope."""
+        expected = {
+            "success": True,
+            "schema_version": "1.0",
+            "timestamp": "2026-06-06T00:00:00+00:00",
+            "symbol": "BTC/USDT:USDT",
+            "data": {"setup": {"action_state": "watch"}},
+            "score": {},
+            "reasons": [],
+            "warnings": [],
+            "errors": [],
+        }
+        with patch("kairos.mcp_server.run_analyze_symbol_setup", return_value=expected) as mock_analyze:
+            result = analyze_symbol_setup("BTCUSDT")
+
+        assert result == expected
+        mock_analyze.assert_called_once_with(symbol="BTCUSDT", exchange=None)
 
     def test_get_market_cycle(self):
         """Test get_market_cycle returns expected fields."""
@@ -78,6 +126,7 @@ class TestMCPServer:
             "last": 68_500.0,
             "quoteVolume": 2.5e10,
             "percentage": 3.2,
+            "openInterest": 1e9,
         }
         with patch("kairos.mcp_server._get_exchange", return_value=MagicMock(exchange=mock_ex)):
             result = scan_symbols()
@@ -92,6 +141,7 @@ class TestMCPServer:
             "last": 142.0,
             "quoteVolume": 3e10,
             "percentage": 5.0,
+            "openInterest": 1e9,
         }
         with patch("kairos.mcp_server._get_exchange", return_value=MagicMock(exchange=mock_ex)):
             result = scan_symbols(formula="perfect")

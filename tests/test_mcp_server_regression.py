@@ -77,6 +77,7 @@ def make_exchange(markets: dict, tickers: dict | None = None, ohlcv=None):
     """Create wrapped exchange mock returned by _get_exchange."""
     client = MagicMock()
     client.load_markets.return_value = markets
+    client.fetch_tickers.return_value = tickers or {}
     client.fetch_ticker.side_effect = lambda symbol: (tickers or {}).get(symbol, {})
     client.fetch_ohlcv.return_value = ohlcv or []
     client.has = {}
@@ -184,6 +185,34 @@ def test_scan_symbols_applies_volume_oi_volatility_and_age_warning():
     assert result["summary"]["total_scanned"] == 4
     assert result["summary"]["min_age_unsupported"] == 4
     assert "min_age is unsupported" in result["warnings"][0]
+    exchange.exchange.fetch_tickers.assert_called_once_with(params={"instType": "SWAP"})
+    exchange.exchange.fetch_ticker.assert_not_called()
+
+
+def test_scan_symbols_uses_quote_notional_for_okx_swap_volume():
+    markets = {
+        "BTC/USDT:USDT": {"quote": "USDT", "settle": "USDT", "active": True},
+        "SMALL/USDT:USDT": {"quote": "USDT", "settle": "USDT", "active": True},
+    }
+    tickers = {
+        "BTC/USDT:USDT": {
+            "last": 100,
+            "quoteVolume": None,
+            "baseVolume": 10,
+            "percentage": 1,
+            "openInterest": 75,
+            "info": {"volCcy24h": "1"},
+        },
+        "SMALL/USDT:USDT": {"last": 1, "quoteVolume": 500, "percentage": 1, "openInterest": 75},
+    }
+    exchange = make_exchange(markets, tickers)
+
+    with patch("kairos.mcp_server._get_exchange", return_value=exchange):
+        result = scan_symbols(min_volume=600, min_oi=50, max_volatility=6, min_age=0)
+
+    assert [candidate["symbol"] for candidate in result["candidates"]] == ["BTC/USDT:USDT"]
+    assert result["candidates"][0]["volume_24h"] == 1000.0
+    exchange.exchange.fetch_ticker.assert_not_called()
 
 
 def test_scan_symbols_filters_by_supported_age_sorts_and_scores():
@@ -211,17 +240,50 @@ def test_scan_symbols_filters_by_supported_age_sorts_and_scores():
     assert all(candidate["score"] is not None for candidate in result["candidates"])
 
 
-def test_scan_symbols_uses_fetch_open_interest_when_ticker_lacks_oi():
-    markets = {"BTC/USDT": {"quote": "USDT", "active": True}}
-    tickers = {"BTC/USDT": {"last": 10, "quoteVolume": 200, "percentage": 1}}
+def test_scan_symbols_uses_okx_bulk_open_interest_when_ticker_lacks_oi():
+    markets = {"BTC/USDT:USDT": {"quote": "USDT", "settle": "USDT", "active": True, "id": "BTC-USDT-SWAP"}}
+    tickers = {"BTC/USDT:USDT": {"last": 10, "quoteVolume": 200, "percentage": 1}}
     exchange = make_exchange(markets, tickers)
     exchange.exchange.has = {"fetchOpenInterest": True}
-    exchange.exchange.fetch_open_interest.return_value = {"openInterestValue": "75"}
+    exchange.exchange.publicGetPublicOpenInterest.return_value = {
+        "data": [{"instId": "BTC-USDT-SWAP", "oiUsd": "75"}]
+    }
 
     with patch("kairos.mcp_server._get_exchange", return_value=exchange):
         result = scan_symbols(min_volume=100, min_oi=50, max_volatility=6, min_age=0)
 
     assert result["candidates"][0]["open_interest"] == 75.0
+    exchange.exchange.fetch_open_interest.assert_not_called()
+    exchange.exchange.fetch_ticker.assert_not_called()
+
+
+def test_scan_symbols_falls_back_to_single_ticker_only_when_bulk_missing_symbol():
+    markets = {"BTC/USDT:USDT": {"quote": "USDT", "settle": "USDT", "active": True, "id": "BTC-USDT-SWAP"}}
+    exchange = make_exchange(markets, tickers={})
+    exchange.exchange.fetch_ticker.side_effect = None
+    exchange.exchange.fetch_ticker.return_value = {"last": 10, "quoteVolume": 200, "percentage": 1, "openInterest": 75}
+
+    with patch("kairos.mcp_server._get_exchange", return_value=exchange):
+        result = scan_symbols(min_volume=100, min_oi=50, max_volatility=6, min_age=0)
+
+    assert result["candidates"][0]["symbol"] == "BTC/USDT:USDT"
+    exchange.exchange.fetch_ticker.assert_called_once_with("BTC/USDT:USDT")
+
+
+def test_scan_symbols_warns_and_filters_when_bulk_oi_unavailable_without_per_symbol_fetch():
+    markets = {"BTC/USDT:USDT": {"quote": "USDT", "settle": "USDT", "active": True, "id": "BTC-USDT-SWAP"}}
+    tickers = {"BTC/USDT:USDT": {"last": 10, "quoteVolume": 200, "percentage": 1}}
+    exchange = make_exchange(markets, tickers)
+    exchange.exchange.has = {"fetchOpenInterest": True}
+    exchange.exchange.publicGetPublicOpenInterest.side_effect = RuntimeError("slow oi")
+
+    with patch("kairos.mcp_server._get_exchange", return_value=exchange):
+        result = scan_symbols(min_volume=100, min_oi=50, max_volatility=6, min_age=0)
+
+    assert result["candidates"] == []
+    assert any("open interest is unavailable" in warning for warning in result["warnings"])
+    exchange.exchange.fetch_open_interest.assert_not_called()
+    exchange.exchange.fetch_ticker.assert_not_called()
 
 
 def test_scan_symbols_no_exchange_and_top_level_error_paths():

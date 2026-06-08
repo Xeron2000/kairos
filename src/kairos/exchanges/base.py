@@ -30,6 +30,7 @@ class BaseExchange(ABC):
             self.exchange = getattr(ccxt, exchange_name)(
                 {
                     "enableRateLimit": True,
+                    "timeout": 8000,
                 }
             )
 

@@ -129,6 +129,24 @@ class TestSymbolDiscovery:
         assert symbols[0] == "BTC/USDT:USDT"
 
     @pytest.mark.asyncio
+    async def test_sorts_okx_swap_by_quote_notional_not_vol_ccy(self):
+        dm = DataManager(_make_config(topSymbols=2))
+        mock_ex = MagicMock()
+        mock_ex.exchange.fetch_tickers.return_value = {
+            "BTC/USDT:USDT": {
+                "last": 63_109.1,
+                "quoteVolume": None,
+                "baseVolume": 14_805_902.16,
+                "info": {"vol24h": "14805902.16", "volCcy24h": "148059.0216"},
+            },
+            "SMALL/USDT:USDT": {"last": 1.0, "quoteVolume": 50_000_000},
+        }
+
+        symbols = await dm._discover_symbols(mock_ex, 2)
+
+        assert symbols == ["BTC/USDT:USDT", "SMALL/USDT:USDT"]
+
+    @pytest.mark.asyncio
     async def test_respects_top_n(self):
         dm = DataManager(_make_config(topSymbols=2))
         mock_ex = _mock_exchange()

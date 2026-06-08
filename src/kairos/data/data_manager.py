@@ -19,6 +19,7 @@ from kairos.exchanges.binance import BinanceExchange
 from kairos.exchanges.bybit import BybitExchange
 from kairos.exchanges.okx import OkxExchange
 from kairos.utils.blacklist import Blacklist
+from kairos.utils.market_data import extract_quote_volume
 from kairos.webhook import SignalEvent, WebhookClient
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,9 @@ class DataManager:
             # Filter USDT perpetual: symbol ends with ":USDT" or "/USDT:"
             if not (_is_usdt_perpetual(sym)):
                 continue
-            vol = ticker.get("quoteVolume") or ticker.get("baseVolume") or 0
+            vol = extract_quote_volume(ticker)
+            if vol <= 0:
+                continue
             candidates.append((sym, vol))
 
         candidates.sort(key=lambda x: x[1], reverse=True)

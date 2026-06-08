@@ -15,6 +15,9 @@ from kairos.config import KairosArchitectureConfig, load_architecture_config, lo
 from kairos.mcp_schema import make_mcp_envelope, normalize_symbol
 from kairos.utils.blacklist import Blacklist
 from kairos.utils.get_exchange import get_exchange
+from kairos.utils.market_data import extract_last_price as _shared_extract_last_price
+from kairos.utils.market_data import extract_quote_volume as _shared_extract_quote_volume
+from kairos.utils.market_data import first_float as _shared_first_float
 
 logger = logging.getLogger(__name__)
 
@@ -880,27 +883,11 @@ def _ohlcv_to_arrays(raw: Any) -> dict[str, np.ndarray] | None:
 
 
 def _extract_quote_volume(ticker: Mapping[str, Any]) -> float:
-    direct = _first_float(ticker, ["quoteVolume", "quoteVolume24h", "turnover", "turnover24h"])
-    if direct is not None:
-        return direct
-    info = ticker.get("info", {})
-    if isinstance(info, Mapping):
-        nested = _first_float(info, ["volCcy24h", "volumeCcy24h", "quoteVolume", "turnover24h"])
-        if nested is not None:
-            return nested
-    base_volume = _first_float(ticker, ["baseVolume", "volume"])
-    price = _extract_last_price(ticker)
-    return base_volume * price if base_volume is not None and price is not None else 0.0
+    return _shared_extract_quote_volume(ticker)
 
 
 def _extract_last_price(ticker: Mapping[str, Any]) -> float | None:
-    value = _first_float(ticker, ["last", "close", "markPrice", "lastPrice"])
-    if value is not None:
-        return value
-    info = ticker.get("info", {})
-    if isinstance(info, Mapping):
-        return _first_float(info, ["last", "lastPrice", "markPx", "idxPx"])
-    return None
+    return _shared_extract_last_price(ticker)
 
 
 def _extract_change_pct(ticker: Mapping[str, Any]) -> float | None:
@@ -935,15 +922,7 @@ def _extract_funding_rate(ticker: Mapping[str, Any]) -> float | None:
 
 
 def _first_float(mapping: Mapping[str, Any], keys: list[str]) -> float | None:
-    for key in keys:
-        value = mapping.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
+    return _shared_first_float(mapping, keys)
 
 
 def _trend(ohlcv: Mapping[str, np.ndarray]) -> str:

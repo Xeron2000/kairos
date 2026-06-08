@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from kairos.scanner import Direction, MarketScanner, analyze_symbol_setup, scan_market
+from kairos.scanner import Direction, MarketScanner, _extract_quote_volume, analyze_symbol_setup, scan_market
 
 
 class FakeBlacklist:
@@ -95,6 +95,21 @@ def _ticker(symbol: str, quote_volume: float, percentage: float = 3.0):
         "openInterest": 10_000_000.0,
         "fundingRate": 0.0001,
     }
+
+
+def test_okx_swap_quote_volume_uses_base_volume_times_last_before_vol_ccy():
+    ticker = {
+        "last": 63_109.1,
+        "quoteVolume": None,
+        "baseVolume": 14_805_902.16,
+        "info": {
+            "vol24h": "14805902.16",
+            "volCcy24h": "148059.0216",
+        },
+    }
+
+    assert _extract_quote_volume(ticker) == 14_805_902.16 * 63_109.1
+    assert _extract_quote_volume(ticker) > 30_000_000
 
 
 def test_scan_market_returns_candidates_but_withholds_setups_without_btc_context():

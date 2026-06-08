@@ -25,9 +25,12 @@ from kairos.analysis.support_resistance import SupportResistance
 from kairos.scanner import analyze_symbol_setup as run_analyze_symbol_setup
 from kairos.scanner import scan_market as run_scan_market
 from kairos.utils.blacklist import Blacklist
+from kairos.utils.market_data import extract_last_price, extract_quote_volume
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kairos-mcp")
+
+DEFAULT_EXCHANGE_TIMEOUT_MS = 8_000
 
 mcp = FastMCP(
     name="Kairos",
@@ -121,6 +124,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _configure_exchange_client(exchange_client: Any) -> None:
+    """Apply bounded REST defaults to a ccxt client-like object."""
+    if not hasattr(exchange_client, "timeout") or not getattr(exchange_client, "timeout", None):
+        try:
+            exchange_client.timeout = DEFAULT_EXCHANGE_TIMEOUT_MS
+        except Exception as exc:
+            logger.debug("Cannot set exchange timeout: %s", exc)
+    try:
+        exchange_client.enableRateLimit = True
+    except Exception as exc:
+        logger.debug("Cannot set exchange rate limit flag: %s", exc)
+
+
 def _is_usdt_symbol(symbol: str, market: dict[str, Any]) -> bool:
     """Return True for active USDT derivative markets accepted by the legacy scanner tool."""
     if not isinstance(symbol, str):
@@ -169,10 +185,9 @@ def _market_age_days(market: dict[str, Any]) -> Optional[float]:
 
 def _open_interest(exchange_client: Any, symbol: str, ticker: dict[str, Any]) -> float:
     """Fetch or extract open interest for scan filtering."""
-    for key in ("openInterestValue", "openInterestAmount", "openInterest"):
-        value = _safe_float(ticker.get(key), 0.0)
-        if value:
-            return value
+    ticker_value = _open_interest_from_ticker(ticker)
+    if ticker_value:
+        return ticker_value
 
     has_payload = getattr(exchange_client, "has", {})
     has = has_payload if isinstance(has_payload, dict) else {}
@@ -185,11 +200,93 @@ def _open_interest(exchange_client: Any, symbol: str, ticker: dict[str, Any]) ->
         logger.debug("Failed to fetch open interest for %s: %s", symbol, exc)
         return 0.0
 
-    for key in ("openInterestValue", "openInterestAmount", "openInterest"):
+    if isinstance(info, dict):
+        return _open_interest_from_ticker(info)
+    return 0.0
+
+
+def _open_interest_from_ticker(ticker: dict[str, Any]) -> float:
+    """Extract open interest from ticker-like payloads without network calls."""
+    for key in ("openInterestValue", "openInterestAmount", "openInterest", "oiUsd", "oiCcy"):
+        value = _safe_float(ticker.get(key), 0.0)
+        if value:
+            return value
+    info_payload = ticker.get("info")
+    info = info_payload if isinstance(info_payload, dict) else {}
+    for key in ("openInterestValue", "openInterestAmount", "openInterest", "oiUsd", "oiCcy"):
         value = _safe_float(info.get(key), 0.0)
         if value:
             return value
     return 0.0
+
+
+def _fetch_scan_tickers(exchange_client: Any) -> dict[str, Any]:
+    """Fetch tickers in bulk for scan_symbols, preferring OKX swap params."""
+    fetch_tickers = getattr(exchange_client, "fetch_tickers", None)
+    if not callable(fetch_tickers):
+        return {}
+    try:
+        payload = fetch_tickers(params={"instType": "SWAP"})
+    except TypeError:
+        try:
+            payload = fetch_tickers()
+        except Exception as exc:
+            logger.debug("Bulk fetch_tickers failed: %s", exc)
+            return {}
+    except Exception as exc:
+        logger.debug("Bulk fetch_tickers with swap params failed: %s", exc)
+        try:
+            payload = fetch_tickers()
+        except Exception as fallback_exc:
+            logger.debug("Bulk fetch_tickers fallback failed: %s", fallback_exc)
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fetch_ticker_fallback(exchange_client: Any, symbol: str) -> dict[str, Any]:
+    fetch_ticker = getattr(exchange_client, "fetch_ticker", None)
+    if not callable(fetch_ticker):
+        return {}
+    try:
+        payload = fetch_ticker(symbol)
+    except Exception as exc:
+        logger.debug("Fallback fetch_ticker failed for %s: %s", symbol, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fetch_okx_open_interest_map(exchange_client: Any) -> dict[str, float]:
+    """Fetch OKX swap open interest in one raw request when available."""
+    method = getattr(exchange_client, "publicGetPublicOpenInterest", None)
+    if not callable(method):
+        return {}
+    try:
+        payload = method({"instType": "SWAP"}) or {}
+    except Exception as exc:
+        logger.debug("OKX bulk open interest fetch failed: %s", exc)
+        return {}
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    result: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        inst_id = str(row.get("instId") or "")
+        value = _safe_float(row.get("oiUsd") or row.get("oiCcy") or row.get("oi"), 0.0)
+        if inst_id and value:
+            result[inst_id] = value
+    return result
+
+
+def _market_inst_id(symbol: str, market: dict[str, Any]) -> str:
+    info_payload = market.get("info")
+    info = info_payload if isinstance(info_payload, dict) else {}
+    inst_id = market.get("id") or info.get("instId")
+    if inst_id:
+        return str(inst_id)
+    base = symbol.split("/")[0]
+    return f"{base}-USDT-SWAP"
 
 
 # ── State ──────────────────────────────────────────────────────────────────
@@ -392,7 +489,9 @@ def scan_symbols(
         if not ex:
             return {"success": False, "error": f"Cannot connect to {exchange}"}
 
-        markets = ex.exchange.load_markets() or {}
+        exchange_client = ex.exchange
+        _configure_exchange_client(exchange_client)
+        markets = exchange_client.load_markets() or {}
         usdt_symbols = []
         for scan_symbol, scan_market_info in markets.items():
             market_info = scan_market_info if isinstance(scan_market_info, dict) else {}
@@ -403,17 +502,21 @@ def scan_symbols(
         warnings = []
         min_age_supported = 0
         min_age_unsupported = 0
+        missing_oi = 0
+        tickers = _fetch_scan_tickers(exchange_client)
+        oi_by_inst_id = _fetch_okx_open_interest_map(exchange_client)
 
         for symbol in usdt_symbols:
             try:
                 market_payload = markets.get(symbol)
                 market: dict[str, Any] = market_payload if isinstance(market_payload, dict) else {}
-                ticker_payload = ex.exchange.fetch_ticker(symbol)
+                ticker_payload = tickers.get(symbol) or _fetch_ticker_fallback(exchange_client, symbol)
                 ticker: dict[str, Any] = ticker_payload if isinstance(ticker_payload, dict) else {}
-                vol = _safe_float(ticker.get("quoteVolume") or ticker.get("baseVolume"), 0.0)
-                price = _safe_float(ticker.get("last") or ticker.get("close"), 0.0)
+                vol = extract_quote_volume(ticker)
+                price = extract_last_price(ticker) or 0.0
                 change = _safe_float(ticker.get("percentage"), 0.0)
-                open_interest = _open_interest(ex.exchange, symbol, ticker)
+                inst_id = _market_inst_id(symbol, market)
+                open_interest = _open_interest_from_ticker(ticker) or oi_by_inst_id.get(inst_id, 0.0)
                 age_days = _market_age_days(market)
 
                 if min_age > 0:
@@ -425,6 +528,9 @@ def scan_symbols(
                             continue
 
                 if vol < min_volume:
+                    continue
+                if open_interest <= 0 and min_oi > 0:
+                    missing_oi += 1
                     continue
                 if open_interest < min_oi:
                     continue
@@ -458,6 +564,11 @@ def scan_symbols(
             warnings.append(
                 "min_age is unsupported for symbols without listing metadata; "
                 f"{min_age_unsupported} symbol(s) were not age-filtered."
+            )
+        if min_oi > 0 and missing_oi:
+            warnings.append(
+                "open interest is unavailable for some symbols; "
+                f"{missing_oi} symbol(s) were filtered without per-symbol OI fetch."
             )
 
         candidates.sort(key=lambda x: x["volume_24h"], reverse=True)

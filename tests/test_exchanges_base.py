@@ -46,8 +46,8 @@ class TestBaseExchange:
             assert exchange.last_prices == {}
             assert exchange.historical_prices == {}
 
-            # Verify exchange was initialized with rate limiting
-            mock_binance.assert_called_once_with({"enableRateLimit": True})
+            # Verify exchange was initialized with rate limiting and bounded REST timeout
+            mock_binance.assert_called_once_with({"enableRateLimit": True, "timeout": 8000})
 
     def test_init_invalid_exchange(self):
         """Test initialization with an invalid exchange name."""

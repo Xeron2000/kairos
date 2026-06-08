@@ -53,14 +53,17 @@ dataManager:
 # 提醒策略 / Alert Policy
 # ═══════════════════════════════════════════════════════════════════════════════
 alertPolicy:
-  # KISS 模式: 只把更像交易机会的强异动发给 Hermes
-  # KISS mode: only forward stronger opportunity-like anomalies to Hermes
+  # KISS 模式: 只把更像交易机会的期货关键异动发给 Hermes
+  # KISS mode: only forward stronger opportunity-like futures anomalies to Hermes
   enabled: true
 
-  # 只推价格异动；纯放量不代表方向，默认不推
-  # Only forward price velocity; volume-only spikes have no direction by default
+  # 任一关键指标异动都可进入 Hermes 分析；阈值和冷却负责降噪
+  # Any key futures metric anomaly can enter Hermes analysis; thresholds/cooldowns reduce noise
   allowedEventTypes:
     - "price_velocity"
+    - "volume_spike"
+    - "open_interest_change"
+    - "funding_rate_anomaly"
 
   # 最低强度 / Minimum severity: LOW, MEDIUM, HIGH
   minSeverity: "MEDIUM"
@@ -70,6 +73,14 @@ alertPolicy:
 
   # 如果允许 volume_spike，最低放量倍数 / Minimum ratio if volume_spike is allowed
   minVolumeRatio: 6.0
+
+  # 持仓异动最低绝对变化 (%) / Minimum absolute open-interest change (%)
+  minOpenInterestChangePct: 5.0
+
+  # 资金费率异常阈值 / Funding-rate anomaly thresholds
+  # 0.0005 = 0.05%; 0.0003 = 0.03%
+  minFundingRateAbs: 0.0005
+  minFundingRateChangeAbs: 0.0003
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 价格异动探测器 / Price Velocity Detector
@@ -103,6 +114,44 @@ volumeSpike:
   # 对比窗口 (分钟) / Baseline window (minutes)
   windowMinutes: 10
 
+  # 冷启动预热时间；未积累足够基线前不触发放量事件
+  # Cold-start warmup; volume spikes need enough baseline history first
+  minHistorySeconds: 600
+
   # 同 symbol 最小通知间隔 / Min interval between notifications per symbol
   # 支持格式 / Supported formats: "30s", "2m", "1h"
   minNotifyInterval: "2m"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 合约指标异动探测器 / Futures Metrics Detector
+# ═══════════════════════════════════════════════════════════════════════════════
+futuresMetrics:
+  enabled: true
+
+  # REST 轮询间隔 (秒) / REST polling interval (seconds)
+  pollIntervalSeconds: 300
+
+  # 部分交易所不支持批量资金费率时，是否按 symbol 兜底拉取
+  # Fallback to per-symbol funding-rate requests when bulk data is unavailable
+  fetchFundingPerSymbol: true
+
+  openInterest:
+    enabled: true
+
+    # 持仓量相对上次采样变化阈值 (%) / Open-interest change vs previous sample (%)
+    minChangePct: 5.0
+
+    # 同 symbol 持仓异动最小通知间隔 / Min interval per symbol for OI anomalies
+    minNotifyInterval: "30m"
+
+  fundingRate:
+    enabled: true
+
+    # 资金费率绝对值异常阈值 / Absolute funding-rate threshold
+    absRateThreshold: 0.0005
+
+    # 相对上次采样的资金费率变化阈值 / Funding-rate shift vs previous sample
+    minChangeAbs: 0.0003
+
+    # 同 symbol 资金费率异动最小通知间隔 / Min interval per symbol for funding anomalies
+    minNotifyInterval: "30m"

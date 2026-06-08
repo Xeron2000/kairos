@@ -12,7 +12,7 @@ class AnomalyEvent:
     """Event emitted when an anomaly is detected."""
 
     symbol: str
-    event_type: str  # "price_velocity" | "volume_spike"
+    event_type: str  # "price_velocity" | "volume_spike" | "open_interest_change" | "funding_rate_anomaly"
     severity: str  # "HIGH" | "MEDIUM" | "LOW"
     data: dict
     timestamp: float = field(default_factory=time.time)

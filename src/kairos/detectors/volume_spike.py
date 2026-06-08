@@ -21,12 +21,15 @@ class VolumeSpikeDetector(BaseDetector):
         self.enabled = vs.get("enabled", True)
         self.multiplier = vs.get("multiplier", 3.0)
         self.window_minutes = vs.get("windowMinutes", 10)
+        self.min_history_seconds = _parse_seconds(vs.get("minHistorySeconds", self.window_minutes * 60))
         self.min_notify_seconds = _parse_seconds(vs.get("minNotifyInterval", "2m"))
 
         # symbol -> deque of (timestamp_s, cumulative_volume)
         self._volume_history: dict[str, deque] = {}
         # symbol -> last notification timestamp
         self._last_notify: dict[str, float] = {}
+        # symbol -> latest price from the ticker stream, used as webhook context.
+        self._last_price: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API (called from WS handler thread)
@@ -45,6 +48,12 @@ class VolumeSpikeDetector(BaseDetector):
             history.append((timestamp, cumulative_volume))
             self._check_spike(symbol, timestamp)
 
+    def on_price_update(self, symbol: str, price: float, timestamp: float):
+        with self._lock:
+            if not self.enabled:
+                return
+            self._last_price[symbol] = price
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -52,6 +61,8 @@ class VolumeSpikeDetector(BaseDetector):
     def _check_spike(self, symbol: str, now: float):
         history = self._volume_history[symbol]
         if len(history) < 10:
+            return
+        if history[-1][0] - history[0][0] < self.min_history_seconds:
             return
 
         window_start = now - self.window_minutes * 60
@@ -108,6 +119,7 @@ class VolumeSpikeDetector(BaseDetector):
                 event_type="volume_spike",
                 severity=severity,
                 data={
+                    "price": round(self._last_price.get(symbol, 0.0), 8),
                     "ratio": round(ratio, 2),
                     "recent_avg": round(recent_avg, 2),
                     "window_avg": round(window_avg, 2),
@@ -124,6 +136,7 @@ class VolumeSpikeDetector(BaseDetector):
             self.enabled = vs.get("enabled", True)
             self.multiplier = vs.get("multiplier", 3.0)
             self.window_minutes = vs.get("windowMinutes", 10)
+            self.min_history_seconds = _parse_seconds(vs.get("minHistorySeconds", self.window_minutes * 60))
             self.min_notify_seconds = _parse_seconds(vs.get("minNotifyInterval", "2m"))
 
 

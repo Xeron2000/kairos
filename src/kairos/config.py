@@ -25,10 +25,18 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "alertPolicy": {
         "enabled": True,
-        "allowedEventTypes": ["price_velocity"],
+        "allowedEventTypes": [
+            "price_velocity",
+            "volume_spike",
+            "open_interest_change",
+            "funding_rate_anomaly",
+        ],
         "minSeverity": "MEDIUM",
         "minPriceChangePct": 1.2,
         "minVolumeRatio": 6.0,
+        "minOpenInterestChangePct": 5.0,
+        "minFundingRateAbs": 0.0005,
+        "minFundingRateChangeAbs": 0.0003,
     },
     "priceVelocity": {
         "enabled": True,
@@ -43,7 +51,24 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "multiplier": 3.0,
         "windowMinutes": 10,
+        "minHistorySeconds": 600,
         "minNotifyInterval": "2m",
+    },
+    "futuresMetrics": {
+        "enabled": True,
+        "pollIntervalSeconds": 300,
+        "fetchFundingPerSymbol": True,
+        "openInterest": {
+            "enabled": True,
+            "minChangePct": 5.0,
+            "minNotifyInterval": "30m",
+        },
+        "fundingRate": {
+            "enabled": True,
+            "absRateThreshold": 0.0005,
+            "minChangeAbs": 0.0003,
+            "minNotifyInterval": "30m",
+        },
     },
     "scanner": {
         "intervalSeconds": 300,

@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 
 import anyio
 
+from kairos.detectors.futures_metrics import FuturesMetricsDetector
 from kairos.detectors.price_velocity import PriceVelocityDetector
 from kairos.detectors.volume_spike import VolumeSpikeDetector
 from kairos.exchanges.binance import BinanceExchange
@@ -57,21 +58,39 @@ class DataManager:
         # ── Detector configs ──
         self._velocity_config = config.get("priceVelocity", {})
         self._spike_config = config.get("volumeSpike", {})
+        self._metrics_config = config.get("futuresMetrics", {})
 
         # ── Alert policy ──
         policy = config.get("alertPolicy", {})
         self._alert_policy_enabled: bool = bool(policy.get("enabled", True))
         self._allowed_event_types: set[str] | None = _normalize_event_types(
-            policy.get("allowedEventTypes", ["price_velocity"])
+            policy.get(
+                "allowedEventTypes",
+                ["price_velocity", "volume_spike", "open_interest_change", "funding_rate_anomaly"],
+            )
         )
         self._min_severity_rank: int = _severity_rank(policy.get("minSeverity", "MEDIUM"))
         self._min_price_change_pct: float = _float_config(policy.get("minPriceChangePct", 1.2), 1.2)
         self._min_volume_ratio: float = _float_config(policy.get("minVolumeRatio", 6.0), 6.0)
+        self._min_open_interest_change_pct: float = _float_config(
+            policy.get("minOpenInterestChangePct", 5.0), 5.0
+        )
+        self._min_funding_rate_abs: float = _float_config(policy.get("minFundingRateAbs", 0.0005), 0.0005)
+        self._min_funding_rate_change_abs: float = _float_config(
+            policy.get("minFundingRateChangeAbs", 0.0003), 0.0003
+        )
+        self._metrics_poll_interval: float = _float_config(self._metrics_config.get("pollIntervalSeconds", 300), 300)
+        self._fetch_funding_per_symbol: bool = bool(self._metrics_config.get("fetchFundingPerSymbol", True))
 
         # ── Dedup state ──
         self._last_sent: Dict[str, float] = {}  # "symbol__event_type" → timestamp
-        self._symbol_last_sent: Dict[str, float] = {}  # symbol → timestamp
+        self._symbol_event_last_sent: Dict[str, float] = {}  # "symbol__event_type" → timestamp
         self._dedup_lock = threading.Lock()
+
+        # ── Metrics polling state ──
+        self._symbols_by_exchange: Dict[str, List[str]] = {}
+        self._metrics_detectors: Dict[str, FuturesMetricsDetector] = {}
+        self._metrics_task: asyncio.Task | None = None
 
         # ── Thread-safe webhook dispatch ──
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -113,18 +132,22 @@ class DataManager:
                 symbols_map[name] = []
 
         # 3. Register detectors and start WebSocket
+        self._symbols_by_exchange = symbols_map
         for name, exchange in self.exchanges.items():
             symbols = symbols_map.get(name, [])
             if not symbols:
                 continue
 
             self._register_detectors(name, exchange)
+            self._register_metrics_detector(name)
             exchange.start_websocket(symbols)
             logger.info("WebSocket started for %s with %d symbols", name, len(symbols))
 
         # 4. Start periodic symbol refresh
         self.running = True
         self._refresh_task = asyncio.ensure_future(self._refresh_loop())
+        if self._metrics_detectors:
+            self._metrics_task = asyncio.ensure_future(self._futures_metrics_loop())
 
         logger.info(
             "DataManager started: exchanges=%s webhook=%s",
@@ -141,6 +164,13 @@ class DataManager:
             self._refresh_task.cancel()
             try:
                 await self._refresh_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._metrics_task:
+            self._metrics_task.cancel()
+            try:
+                await self._metrics_task
             except asyncio.CancelledError:
                 pass
 
@@ -196,6 +226,15 @@ class DataManager:
             exchange.register_detector(s)
             logger.info("Spike detector registered: %s", name)
 
+    def _register_metrics_detector(self, name: str) -> None:
+        """Register periodic futures metrics detector for OI/funding anomalies."""
+        if not self._metrics_config.get("enabled", True):
+            return
+        detector = FuturesMetricsDetector(self._metrics_config)
+        detector.on_event(self._on_anomaly_event)
+        self._metrics_detectors[name] = detector
+        logger.info("Futures metrics detector registered: %s", name)
+
     # ── Anomaly Event → Webhook ────────────────────────────────
 
     def _on_anomaly_event(self, event) -> None:
@@ -220,19 +259,19 @@ class DataManager:
                 logger.debug("Dedup drop: %s (%.1fs since last)", dedup_key, now - last)
                 return
 
-            # Per-symbol cooldown: skip same symbol within cooldown window
-            symbol_last = self._symbol_last_sent.get(event.symbol, 0)
-            if now - symbol_last < self._symbol_cooldown:
+            # Per-symbol+event cooldown suppresses repeats without hiding a different futures anomaly.
+            symbol_event_last = self._symbol_event_last_sent.get(dedup_key, 0)
+            if now - symbol_event_last < self._symbol_cooldown:
                 logger.debug(
                     "Cooldown drop: %s (%ds since last, cooldown %ds)",
-                    event.symbol,
-                    int(now - symbol_last),
+                    dedup_key,
+                    int(now - symbol_event_last),
                     int(self._symbol_cooldown),
                 )
                 return
 
             self._last_sent[dedup_key] = now
-            self._symbol_last_sent[event.symbol] = now
+            self._symbol_event_last_sent[dedup_key] = now
 
         # Build signal
         data = event.data
@@ -294,6 +333,31 @@ class DataManager:
                 )
                 return False
 
+        if event_type == "open_interest_change":
+            change_pct = abs(_float_config(data.get("change_pct", 0.0), 0.0))
+            if change_pct < self._min_open_interest_change_pct:
+                logger.debug(
+                    "Alert policy drop: oi_change_pct=%.2f min=%.2f symbol=%s",
+                    change_pct,
+                    self._min_open_interest_change_pct,
+                    event.symbol,
+                )
+                return False
+
+        if event_type == "funding_rate_anomaly":
+            funding_rate = abs(_float_config(data.get("funding_rate", 0.0), 0.0))
+            change_abs = abs(_float_config(data.get("change_abs", 0.0), 0.0))
+            if funding_rate < self._min_funding_rate_abs and change_abs < self._min_funding_rate_change_abs:
+                logger.debug(
+                    "Alert policy drop: funding=%.6f min=%.6f change=%.6f min_change=%.6f symbol=%s",
+                    funding_rate,
+                    self._min_funding_rate_abs,
+                    change_abs,
+                    self._min_funding_rate_change_abs,
+                    event.symbol,
+                )
+                return False
+
         return True
 
     @staticmethod
@@ -308,6 +372,16 @@ class DataManager:
             ratio = data.get("ratio", "?")
             wm = data.get("window_minutes", "?")
             return f"{ratio}x_{wm}min"
+        if event.event_type == "open_interest_change":
+            change = data.get("change_pct", "?")
+            current = data.get("open_interest", "?")
+            previous = data.get("previous_open_interest", "?")
+            return f"oi_change={change}% current={current} previous={previous}"
+        if event.event_type == "funding_rate_anomaly":
+            rate = data.get("funding_rate", "?")
+            change = data.get("change_abs", "?")
+            reason = data.get("reason", "?")
+            return f"funding_rate={rate} change_abs={change} reason={reason}"
         return "unknown"
 
     # ── Periodic Refresh ──────────────────────────────────────
@@ -340,12 +414,244 @@ class DataManager:
                 except Exception:
                     logger.exception("Refresh failed for %s", name)
 
+    # ── Futures Metrics Polling ────────────────────────────────
+
+    async def _futures_metrics_loop(self) -> None:
+        """Poll open-interest and funding-rate metrics for discovered symbols."""
+        while self.running:
+            try:
+                await self._poll_futures_metrics()
+            except Exception:
+                logger.exception("Futures metrics poll failed")
+            await asyncio.sleep(self._metrics_poll_interval)
+
+    async def _poll_futures_metrics(self) -> None:
+        for name, detector in self._metrics_detectors.items():
+            exchange = self.exchanges.get(name)
+            if exchange is None:
+                continue
+            symbols = self._symbols_by_exchange.get(name, [])
+            if not symbols:
+                continue
+            snapshots = await anyio.to_thread.run_sync(
+                _collect_futures_metrics,
+                exchange.exchange,
+                symbols,
+                self._fetch_funding_per_symbol,
+            )
+            now = time.time()
+            for symbol, data in snapshots.items():
+                detector.on_metrics_update(
+                    symbol=symbol,
+                    timestamp=now,
+                    price=data.get("price", 0.0),
+                    open_interest=data.get("open_interest"),
+                    funding_rate=data.get("funding_rate"),
+                )
+
 
 # ── Helpers ────────────────────────────────────────────────────
 
 def _is_usdt_perpetual(symbol: str) -> bool:
     """Check if a CCXT unified symbol is a USDT perpetual contract."""
     return symbol.endswith(":USDT") and "/USDT:" in symbol
+
+
+def _collect_futures_metrics(
+    exchange_client: Any,
+    symbols: List[str],
+    fetch_funding_per_symbol: bool,
+) -> Dict[str, Dict[str, float | None]]:
+    """Collect price, open-interest, and funding snapshots for symbols."""
+    tickers = _fetch_metrics_tickers(exchange_client)
+    oi_by_symbol = _fetch_open_interest_map(exchange_client)
+    funding_by_symbol = _fetch_funding_rate_map(exchange_client, symbols, fetch_funding_per_symbol)
+
+    snapshots: Dict[str, Dict[str, float | None]] = {}
+    for symbol in symbols:
+        ticker = _ticker_for_symbol(tickers, symbol)
+        price = _extract_price(ticker)
+        ticker_open_interest = _extract_open_interest(ticker)
+        ticker_funding_rate = _extract_funding_rate(ticker)
+        open_interest = ticker_open_interest if ticker_open_interest is not None else oi_by_symbol.get(symbol)
+        funding_rate = ticker_funding_rate if ticker_funding_rate is not None else funding_by_symbol.get(symbol)
+        snapshots[symbol] = {
+            "price": price,
+            "open_interest": open_interest,
+            "funding_rate": funding_rate,
+        }
+    return snapshots
+
+
+def _fetch_metrics_tickers(exchange_client: Any) -> Dict[str, Any]:
+    fetch_tickers = getattr(exchange_client, "fetch_tickers", None)
+    if not callable(fetch_tickers):
+        return {}
+    try:
+        payload = fetch_tickers(params={"instType": "SWAP"})
+    except TypeError:
+        try:
+            payload = fetch_tickers()
+        except Exception as exc:
+            logger.debug("Metrics fetch_tickers failed: %s", exc)
+            return {}
+    except Exception as exc:
+        logger.debug("Metrics fetch_tickers with swap params failed: %s", exc)
+        try:
+            payload = fetch_tickers()
+        except Exception as fallback_exc:
+            logger.debug("Metrics fetch_tickers fallback failed: %s", fallback_exc)
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fetch_open_interest_map(exchange_client: Any) -> Dict[str, float]:
+    """Fetch open interest in bulk when supported by the exchange client."""
+    method = getattr(exchange_client, "publicGetPublicOpenInterest", None)
+    if not callable(method):
+        return {}
+    try:
+        payload = method({"instType": "SWAP"})
+    except Exception as exc:
+        logger.debug("Bulk open-interest fetch failed: %s", exc)
+        return {}
+
+    data = payload.get("data", []) if isinstance(payload, dict) else []
+    result: Dict[str, float] = {}
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        symbol = _symbol_from_inst_id(row.get("instId"))
+        value = _float_config(row.get("oiUsd") or row.get("oiCcy") or row.get("oi"), 0.0)
+        if symbol and value:
+            result[symbol] = value
+    return result
+
+
+def _fetch_funding_rate_map(
+    exchange_client: Any,
+    symbols: List[str],
+    fetch_per_symbol: bool,
+) -> Dict[str, float]:
+    """Fetch funding rates, using bulk when available and per-symbol fallback when configured."""
+    result: Dict[str, float] = {}
+    fetch_funding_rates = getattr(exchange_client, "fetch_funding_rates", None)
+    if callable(fetch_funding_rates):
+        try:
+            payload = fetch_funding_rates(symbols)
+        except TypeError:
+            try:
+                payload = fetch_funding_rates()
+            except Exception as exc:
+                logger.debug("Bulk funding-rate fetch failed: %s", exc)
+                payload = {}
+        except Exception as exc:
+            logger.debug("Bulk funding-rate fetch failed: %s", exc)
+            payload = {}
+        result.update(_funding_rates_from_payload(payload))
+
+    missing = [symbol for symbol in symbols if symbol not in result]
+    fetch_funding_rate = getattr(exchange_client, "fetch_funding_rate", None)
+    if not fetch_per_symbol or not callable(fetch_funding_rate):
+        return result
+
+    for symbol in missing:
+        try:
+            payload = fetch_funding_rate(symbol)
+        except Exception as exc:
+            logger.debug("Funding-rate fetch failed for %s: %s", symbol, exc)
+            continue
+        rate = _extract_funding_rate(payload if isinstance(payload, dict) else {})
+        if rate is not None:
+            result[symbol] = rate
+    return result
+
+
+def _funding_rates_from_payload(payload: Any) -> Dict[str, float]:
+    if not isinstance(payload, dict):
+        return {}
+    result: Dict[str, float] = {}
+    items = payload.items()
+    if isinstance(payload.get("data"), list):
+        items = [(row.get("symbol") or row.get("instId"), row) for row in payload["data"] if isinstance(row, dict)]
+    for key, value in items:
+        if not isinstance(value, dict):
+            continue
+        symbol = _normalize_metric_symbol(str(key or value.get("symbol") or ""))
+        if not symbol:
+            symbol = _symbol_from_inst_id(value.get("instId") or value.get("info", {}).get("instId"))
+        rate = _extract_funding_rate(value)
+        if symbol and rate is not None:
+            result[symbol] = rate
+    return result
+
+
+def _ticker_for_symbol(tickers: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    ticker = tickers.get(symbol)
+    if isinstance(ticker, dict):
+        return ticker
+    normalized = _normalize_metric_symbol(symbol)
+    for key, value in tickers.items():
+        if _normalize_metric_symbol(str(key)) == normalized and isinstance(value, dict):
+            return value
+    return {}
+
+
+def _extract_price(payload: Dict[str, Any]) -> float:
+    for key in ("last", "close", "markPrice", "indexPrice"):
+        value = _float_config(payload.get(key), 0.0)
+        if value:
+            return value
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    for key in ("last", "lastPrice", "markPx", "idxPx"):
+        value = _float_config(info.get(key), 0.0)
+        if value:
+            return value
+    return 0.0
+
+
+def _extract_open_interest(payload: Dict[str, Any]) -> float | None:
+    for key in ("openInterestValue", "openInterestAmount", "openInterest", "oiUsd", "oiCcy"):
+        value = _float_config(payload.get(key), 0.0)
+        if value:
+            return value
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    for key in ("openInterestValue", "openInterestAmount", "openInterest", "oiUsd", "oiCcy"):
+        value = _float_config(info.get(key), 0.0)
+        if value:
+            return value
+    return None
+
+
+def _extract_funding_rate(payload: Dict[str, Any]) -> float | None:
+    for key in ("fundingRate", "funding_rate"):
+        if key in payload:
+            return _float_config(payload.get(key), 0.0)
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    for key in ("fundingRate", "funding_rate"):
+        if key in info:
+            return _float_config(info.get(key), 0.0)
+    return None
+
+
+def _symbol_from_inst_id(value: Any) -> str:
+    if not value:
+        return ""
+    parts = str(value).split("-")
+    if len(parts) >= 2:
+        return f"{parts[0].upper()}/{parts[1].upper()}:USDT"
+    return ""
+
+
+def _normalize_metric_symbol(value: str) -> str:
+    symbol = value.strip().upper()
+    if not symbol:
+        return ""
+    if "-" in symbol and "/" not in symbol:
+        return _symbol_from_inst_id(symbol)
+    if "/USDT" in symbol and ":" not in symbol:
+        return f"{symbol}:USDT"
+    return symbol
 
 
 def _normalize_event_types(value: Any) -> set[str] | None:

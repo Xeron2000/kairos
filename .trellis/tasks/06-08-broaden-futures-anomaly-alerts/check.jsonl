@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify tests, ruff, and robust config handling for new detectors."}
+{"file": ".trellis/spec/backend/mcp-scanner-contracts.md", "reason": "Verify webhook/DataManager contracts and alert filtering behavior."}

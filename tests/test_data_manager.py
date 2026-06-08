@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from kairos.data.data_manager import DataManager, _is_usdt_perpetual
+from kairos.data.data_manager import DataManager, _collect_futures_metrics, _is_usdt_perpetual
 
 # ── Helpers ────────────────────────────────────────────────────
 
@@ -23,6 +23,17 @@ def _make_config(**overrides):
         "dataManager": dm,
         "priceVelocity": {"enabled": True, "windows": [{"seconds": 30, "threshold": 0.5}]},
         "volumeSpike": {"enabled": True, "multiplier": 3.0},
+        "futuresMetrics": {
+            "enabled": True,
+            "pollIntervalSeconds": 300,
+            "openInterest": {"enabled": True, "minChangePct": 5.0, "minNotifyInterval": "30m"},
+            "fundingRate": {
+                "enabled": True,
+                "absRateThreshold": 0.0005,
+                "minChangeAbs": 0.0003,
+                "minNotifyInterval": "30m",
+            },
+        },
     }
 
 
@@ -99,17 +110,27 @@ class TestDataManagerConstruction:
             "dataManager": {"exchanges": ["okx"], "topSymbols": 10},
             "priceVelocity": {"enabled": True, "cooldownSeconds": 120},
             "volumeSpike": {"enabled": False, "multiplier": 5.0},
+            "futuresMetrics": {"enabled": True, "pollIntervalSeconds": 120},
         }
         dm = DataManager(config)
         assert dm._velocity_config["cooldownSeconds"] == 120
         assert dm._spike_config["multiplier"] == 5.0
+        assert dm._metrics_config["pollIntervalSeconds"] == 120
 
-    def test_alert_policy_defaults_to_kiss_price_velocity(self):
+    def test_alert_policy_defaults_to_all_futures_anomalies(self):
         dm = DataManager({})
         assert dm._alert_policy_enabled is True
-        assert dm._allowed_event_types == {"price_velocity"}
+        assert dm._allowed_event_types == {
+            "price_velocity",
+            "volume_spike",
+            "open_interest_change",
+            "funding_rate_anomaly",
+        }
         assert dm._min_price_change_pct == 1.2
         assert dm._min_volume_ratio == 6.0
+        assert dm._min_open_interest_change_pct == 5.0
+        assert dm._min_funding_rate_abs == 0.0005
+        assert dm._min_funding_rate_change_abs == 0.0003
 
 
 # ── Tests: Symbol discovery ────────────────────────────────────
@@ -298,6 +319,77 @@ class TestRegisterDetectors:
 
         assert mock_ex.register_detector.call_count == 1
 
+    def test_registers_metrics_detector(self):
+        dm = DataManager(_make_config())
+
+        with patch("kairos.data.data_manager.FuturesMetricsDetector") as mock_fm:
+            mock_instance = MagicMock()
+            mock_fm.return_value = mock_instance
+
+            dm._register_metrics_detector("okx")
+
+        assert dm._metrics_detectors["okx"] == mock_instance
+        mock_instance.on_event.assert_called_once_with(dm._on_anomaly_event)
+
+    def test_can_disable_metrics_detector(self):
+        config = _make_config()
+        config["futuresMetrics"]["enabled"] = False
+        dm = DataManager(config)
+
+        dm._register_metrics_detector("okx")
+
+        assert dm._metrics_detectors == {}
+
+
+class TestFuturesMetricsPolling:
+    @pytest.mark.asyncio
+    async def test_poll_futures_metrics_forwards_snapshots_to_detector(self):
+        dm = DataManager(_make_config())
+        exchange = MagicMock()
+        exchange.exchange = MagicMock()
+        detector = MagicMock()
+        dm.exchanges = {"okx": exchange}
+        dm._symbols_by_exchange = {"okx": ["BTC/USDT:USDT"]}
+        dm._metrics_detectors = {"okx": detector}
+
+        with patch(
+            "kairos.data.data_manager._collect_futures_metrics",
+            return_value={
+                "BTC/USDT:USDT": {
+                    "price": 65000.0,
+                    "open_interest": 1000000.0,
+                    "funding_rate": 0.0006,
+                }
+            },
+        ) as mock_collect:
+            await dm._poll_futures_metrics()
+
+        mock_collect.assert_called_once_with(exchange.exchange, ["BTC/USDT:USDT"], True)
+        detector.on_metrics_update.assert_called_once()
+        kwargs = detector.on_metrics_update.call_args.kwargs
+        assert kwargs["symbol"] == "BTC/USDT:USDT"
+        assert kwargs["price"] == 65000.0
+        assert kwargs["open_interest"] == 1000000.0
+        assert kwargs["funding_rate"] == 0.0006
+
+    def test_collect_futures_metrics_prefers_zero_funding_rate_from_ticker(self):
+        exchange_client = MagicMock()
+        exchange_client.fetch_tickers.return_value = {
+            "BTC/USDT:USDT": {
+                "last": 65000.0,
+                "openInterestValue": 1000000.0,
+                "fundingRate": 0.0,
+            }
+        }
+        exchange_client.publicGetPublicOpenInterest.return_value = {"data": []}
+        exchange_client.fetch_funding_rates.return_value = {"BTC/USDT:USDT": {"fundingRate": 0.0009}}
+
+        snapshots = _collect_futures_metrics(exchange_client, ["BTC/USDT:USDT"], True)
+
+        assert snapshots["BTC/USDT:USDT"]["price"] == 65000.0
+        assert snapshots["BTC/USDT:USDT"]["open_interest"] == 1000000.0
+        assert snapshots["BTC/USDT:USDT"]["funding_rate"] == 0.0
+
 
 # ── Tests: Signal dedup + dispatch ─────────────────────────────
 
@@ -331,7 +423,7 @@ class TestAnomalyEventDispatch:
         assert mock_wc.send.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_alert_policy_drops_volume_spike_by_default(self):
+    async def test_alert_policy_allows_strong_volume_spike_by_default(self):
         dm = DataManager(_make_config())
         dm.running = True
         dm._loop = asyncio.get_running_loop()
@@ -349,7 +441,7 @@ class TestAnomalyEventDispatch:
         dm._on_anomaly_event(event)
         await asyncio.sleep(0.01)
 
-        assert mock_wc.send.call_count == 0
+        assert mock_wc.send.call_count == 1
 
     @pytest.mark.asyncio
     async def test_alert_policy_drops_small_price_move(self):
@@ -379,6 +471,138 @@ class TestAnomalyEventDispatch:
         assert mock_wc.send.call_count == 0
 
     @pytest.mark.asyncio
+    async def test_alert_policy_allows_open_interest_change_by_default(self):
+        dm = DataManager(_make_config())
+        dm.running = True
+        dm._loop = asyncio.get_running_loop()
+
+        mock_wc = MagicMock()
+        mock_wc.send = AsyncMock()
+        dm._webhook = mock_wc
+
+        event = MagicMock()
+        event.symbol = "BTC/USDT:USDT"
+        event.event_type = "open_interest_change"
+        event.data = {
+            "price": 65000.0,
+            "open_interest": 1060.0,
+            "previous_open_interest": 1000.0,
+            "change_pct": 6.0,
+        }
+        event.severity = "MEDIUM"
+
+        dm._on_anomaly_event(event)
+        await asyncio.sleep(0.01)
+
+        assert mock_wc.send.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_alert_policy_allows_funding_rate_shift_by_default(self):
+        dm = DataManager(_make_config())
+        dm.running = True
+        dm._loop = asyncio.get_running_loop()
+
+        mock_wc = MagicMock()
+        mock_wc.send = AsyncMock()
+        dm._webhook = mock_wc
+
+        event = MagicMock()
+        event.symbol = "ETH/USDT:USDT"
+        event.event_type = "funding_rate_anomaly"
+        event.data = {
+            "price": 3000.0,
+            "funding_rate": 0.0004,
+            "previous_funding_rate": 0.0001,
+            "change_abs": 0.0003,
+            "reason": "shift",
+        }
+        event.severity = "MEDIUM"
+
+        dm._on_anomaly_event(event)
+        await asyncio.sleep(0.01)
+
+        assert mock_wc.send.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_symbol_cooldown_does_not_block_different_event_types(self):
+        dm = DataManager(_make_config(symbolCooldownMinutes=240, dedupWindowSeconds=0))
+        dm.running = True
+        dm._loop = asyncio.get_running_loop()
+
+        mock_wc = MagicMock()
+        mock_wc.send = AsyncMock()
+        dm._webhook = mock_wc
+
+        price_event = MagicMock()
+        price_event.symbol = "BTC/USDT:USDT"
+        price_event.event_type = "price_velocity"
+        price_event.data = {
+            "price": 65000.0,
+            "price_to": 65000.0,
+            "change_pct": 1.5,
+            "window_seconds": 30,
+            "threshold": 0.5,
+        }
+        price_event.severity = "MEDIUM"
+
+        oi_event = MagicMock()
+        oi_event.symbol = "BTC/USDT:USDT"
+        oi_event.event_type = "open_interest_change"
+        oi_event.data = {
+            "price": 65100.0,
+            "open_interest": 1060.0,
+            "previous_open_interest": 1000.0,
+            "change_pct": 6.0,
+        }
+        oi_event.severity = "MEDIUM"
+
+        dm._on_anomaly_event(price_event)
+        dm._on_anomaly_event(oi_event)
+        await asyncio.sleep(0.01)
+
+        assert mock_wc.send.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_symbol_cooldown_still_blocks_same_event_type_repeats(self):
+        dm = DataManager(_make_config(symbolCooldownMinutes=240, dedupWindowSeconds=0))
+        dm.running = True
+        dm._loop = asyncio.get_running_loop()
+
+        mock_wc = MagicMock()
+        mock_wc.send = AsyncMock()
+        dm._webhook = mock_wc
+
+        event1 = MagicMock()
+        event1.symbol = "BTC/USDT:USDT"
+        event1.event_type = "price_velocity"
+        event1.data = {
+            "price": 65000.0,
+            "price_to": 65000.0,
+            "change_pct": 1.5,
+            "window_seconds": 30,
+            "threshold": 0.5,
+        }
+        event1.severity = "MEDIUM"
+
+        event2 = MagicMock()
+        event2.symbol = "BTC/USDT:USDT"
+        event2.event_type = "price_velocity"
+        event2.data = {
+            "price": 65100.0,
+            "price_to": 65100.0,
+            "change_pct": 1.6,
+            "window_seconds": 30,
+            "threshold": 0.5,
+        }
+        event2.severity = "MEDIUM"
+
+        dm._on_anomaly_event(event1)
+        dm._on_anomaly_event(event2)
+        await asyncio.sleep(0.01)
+
+        assert mock_wc.send.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_deduplicates_within_window(self):
         dm = DataManager(_make_config(dedupWindowSeconds=5))
         dm.running = True
@@ -391,13 +615,25 @@ class TestAnomalyEventDispatch:
         event1 = MagicMock()
         event1.symbol = "BTC/USDT:USDT"
         event1.event_type = "price_velocity"
-        event1.data = {"price": 65000.0, "price_to": 65000.0, "window_seconds": 30, "threshold": 0.5}
+        event1.data = {
+            "price": 65000.0,
+            "price_to": 65000.0,
+            "change_pct": 1.5,
+            "window_seconds": 30,
+            "threshold": 0.5,
+        }
         event1.severity = "MEDIUM"
 
         event2 = MagicMock()
         event2.symbol = "BTC/USDT:USDT"
         event2.event_type = "price_velocity"
-        event2.data = {"price": 65100.0, "price_to": 65100.0, "window_seconds": 30, "threshold": 0.5}
+        event2.data = {
+            "price": 65100.0,
+            "price_to": 65100.0,
+            "change_pct": 1.6,
+            "window_seconds": 30,
+            "threshold": 0.5,
+        }
         event2.severity = "MEDIUM"
 
         # First event should be dispatched
@@ -409,7 +645,7 @@ class TestAnomalyEventDispatch:
         await asyncio.sleep(0.01)
 
         # Only one signal sent to webhook
-        assert mock_wc.send.call_count <= 1  # First gets sent via run_coroutine_threadsafe
+        assert mock_wc.send.call_count == 1
 
     @pytest.mark.asyncio
     async def test_different_symbols_not_deduped(self):
@@ -422,10 +658,16 @@ class TestAnomalyEventDispatch:
         dm._webhook = mock_wc
 
         event_btc = MagicMock(
-            symbol="BTC/USDT:USDT", event_type="price_velocity", data={"price": 65000.0}, severity="MEDIUM"
+            symbol="BTC/USDT:USDT",
+            event_type="price_velocity",
+            data={"price": 65000.0, "price_to": 65000.0, "change_pct": 1.5},
+            severity="MEDIUM",
         )
         event_eth = MagicMock(
-            symbol="ETH/USDT:USDT", event_type="price_velocity", data={"price": 3000.0}, severity="MEDIUM"
+            symbol="ETH/USDT:USDT",
+            event_type="price_velocity",
+            data={"price": 3000.0, "price_to": 3000.0, "change_pct": 1.5},
+            severity="MEDIUM",
         )
 
         dm._on_anomaly_event(event_btc)
@@ -433,7 +675,7 @@ class TestAnomalyEventDispatch:
 
         await asyncio.sleep(0.01)
         # Both should be dispatched (different symbols)
-        assert mock_wc.send.call_count >= 0  # async, just check no errors
+        assert mock_wc.send.call_count == 2
 
     def test_drops_when_not_running(self):
         dm = DataManager(_make_config())
@@ -462,6 +704,32 @@ class TestAnomalyEventDispatch:
         result = DataManager._build_condition(event)
         assert "3.5" in result
         assert "10min" in result
+
+    def test_build_condition_open_interest_change(self):
+        event = MagicMock()
+        event.event_type = "open_interest_change"
+        event.data = {
+            "change_pct": 6.0,
+            "open_interest": 1060.0,
+            "previous_open_interest": 1000.0,
+        }
+        result = DataManager._build_condition(event)
+        assert "oi_change=6.0%" in result
+        assert "current=1060.0" in result
+        assert "previous=1000.0" in result
+
+    def test_build_condition_funding_rate_anomaly(self):
+        event = MagicMock()
+        event.event_type = "funding_rate_anomaly"
+        event.data = {
+            "funding_rate": 0.0007,
+            "change_abs": 0.0003,
+            "reason": "extreme+shift",
+        }
+        result = DataManager._build_condition(event)
+        assert "funding_rate=0.0007" in result
+        assert "change_abs=0.0003" in result
+        assert "reason=extreme+shift" in result
 
     def test_build_condition_unknown(self):
         event = MagicMock()

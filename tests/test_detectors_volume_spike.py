@@ -107,6 +107,7 @@ class TestInit:
         assert detector.enabled is True
         assert detector.multiplier == 3.0
         assert detector.window_minutes == 10
+        assert detector.min_history_seconds == 600
         assert detector.min_notify_seconds == 120  # 2m
         assert detector._volume_history == {}
         assert detector._last_notify == {}
@@ -115,6 +116,7 @@ class TestInit:
         assert detector_custom.enabled is True
         assert detector_custom.multiplier == 2.0
         assert detector_custom.window_minutes == 5
+        assert detector_custom.min_history_seconds == 300
         assert detector_custom.min_notify_seconds == 30
 
     def test_flat_config_from_data_manager(self):
@@ -123,11 +125,13 @@ class TestInit:
                 "enabled": True,
                 "multiplier": 7.0,
                 "windowMinutes": 15,
+                "minHistorySeconds": "3m",
                 "minNotifyInterval": "10m",
             }
         )
         assert d.multiplier == 7.0
         assert d.window_minutes == 15
+        assert d.min_history_seconds == 180
         assert d.min_notify_seconds == 600
 
     def test_disabled_via_config(self):
@@ -138,6 +142,7 @@ class TestInit:
         d = VolumeSpikeDetector({"volumeSpike": {"multiplier": 5.0}})
         assert d.multiplier == 5.0
         assert d.window_minutes == 10  # default
+        assert d.min_history_seconds == 600  # default follows windowMinutes
         assert d.min_notify_seconds == 120  # default
 
 
@@ -183,6 +188,28 @@ class TestOnVolumeUpdate:
         ev = events[0]
         assert ev.symbol == "BTC/USDT"
         assert ev.event_type == "volume_spike"
+
+    def test_warmup_blocks_spike_until_min_history_is_available(self):
+        events = []
+        detector = VolumeSpikeDetector(
+            {
+                "volumeSpike": {
+                    "enabled": True,
+                    "multiplier": 2.0,
+                    "windowMinutes": 5,
+                    "minHistorySeconds": "5m",
+                    "minNotifyInterval": "0s",
+                }
+            }
+        )
+        detector.on_event(events.append)
+
+        base_time = 1000.0
+        for i in range(10):
+            detector.on_volume_update("BTC/USDT", 1000.0 + i * 20, base_time + i * 10)
+        detector.on_volume_update("BTC/USDT", 1270.0, base_time + 120)
+
+        assert events == []
 
     def test_event_data_fields(self, detector_custom):
         events = []

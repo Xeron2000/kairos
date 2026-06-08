@@ -136,11 +136,23 @@ class TestLoadConfig:
         # Preserved defaults (not in YAML)
         assert result["notificationTimezone"] == "Asia/Shanghai"
         assert result["priceVelocity"]["enabled"] is True
+        assert result["volumeSpike"]["minHistorySeconds"] == 600
         assert result["dataManager"]["refreshIntervalHours"] == 4
         assert result["dataManager"]["dedupWindowSeconds"] == 5
         assert result["dataManager"]["symbolCooldownMinutes"] == 30
-        assert result["alertPolicy"]["allowedEventTypes"] == ["price_velocity"]
+        assert result["alertPolicy"]["allowedEventTypes"] == [
+            "price_velocity",
+            "volume_spike",
+            "open_interest_change",
+            "funding_rate_anomaly",
+        ]
         assert result["alertPolicy"]["minPriceChangePct"] == 1.2
+        assert result["alertPolicy"]["minOpenInterestChangePct"] == 5.0
+        assert result["alertPolicy"]["minFundingRateAbs"] == 0.0005
+        assert result["alertPolicy"]["minFundingRateChangeAbs"] == 0.0003
+        assert result["futuresMetrics"]["enabled"] is True
+        assert result["futuresMetrics"]["openInterest"]["minChangePct"] == 5.0
+        assert result["futuresMetrics"]["fundingRate"]["minChangeAbs"] == 0.0003
 
     def test_load_invalid_yaml_returns_defaults(self, tmp_path, caplog):
         """load_config with invalid YAML should return defaults and log error."""

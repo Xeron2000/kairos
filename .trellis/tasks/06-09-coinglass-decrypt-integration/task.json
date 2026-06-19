@@ -3,7 +3,7 @@
   "name": "coinglass-decrypt-integration",
   "title": "Integrate Coinglass decrypted market data",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,

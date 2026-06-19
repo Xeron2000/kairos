@@ -57,17 +57,13 @@ class TestBaseExchange:
             ):
                 _TestExchangeImpl("invalid")
 
-    def test_init_with_price_cache(self):
-        """Test that price cache is properly initialized."""
+    def test_init_price_cache_removed(self):
+        """priceCache singleton replaced by price_cache global; base no longer holds its own cache."""
         with patch("kairos.exchanges.base.ccxt.exchanges", ["binance"]), patch(
             "kairos.exchanges.base.ccxt.binance"
         ):
             exchange = _TestExchangeImpl("binance")
-
-            # Verify price cache exists
-            assert hasattr(exchange, "priceCache")
-            assert exchange.priceCache.max_len == 1000
-            # Note: ExpiringDict doesn't have max_age_seconds as a direct attribute
+            assert not hasattr(exchange, "priceCache")  # ponytail: removed dead self.priceCache
 
     @pytest.mark.asyncio
     async def test_get_current_prices_no_websocket_with_cache(self):
@@ -347,8 +343,8 @@ class TestBaseExchange:
         ), patch("kairos.exchanges.base.threading.Thread") as mock_thread, patch(
             "kairos.exchanges.base.time.sleep"
         ), patch("kairos.exchanges.base.logging"), patch(
-            "kairos.exchanges.base.time.time", side_effect=[0, 5, 10, 11, 15]
-        ):  # Multiple calls for timeout
+            "kairos.exchanges.base.time.time", side_effect=[0, 5, 10, 11, 12, 13, 15]
+        ):  # Multiple calls for timeout (+buffer for circuit breaker time checks)
             exchange = _TestExchangeImpl("binance")
 
             # Mock thread creation

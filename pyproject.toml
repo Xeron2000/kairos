@@ -69,6 +69,7 @@ dev = [
   "safety>=3.0.0",
   "pip-audit>=2.7.3",
   "mypy>=1.14.1",
+  "pyright>=1.1.410",
 ]
 
 [tool.pyright]

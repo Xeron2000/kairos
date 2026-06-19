@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from collections import deque
 
 import ccxt
-from expiringdict import ExpiringDict
 
 from kairos.detectors.base import BaseDetector
 from kairos.utils.cache_manager import price_cache
@@ -33,9 +32,6 @@ class BaseExchange(ABC):
                     "timeout": 8000,
                 }
             )
-
-            # Cache for storing price data with TTL of 300 seconds
-            self.priceCache = ExpiringDict(max_len=1000, max_age_seconds=300)
 
             # WebSocket related properties
             self.ws = None
@@ -324,9 +320,7 @@ class BaseExchange(ABC):
         """Fetch close price from N minutes ago via REST API (blocking). Returns float or None."""
         try:
             since = int((time.time() - minutes * 60) * 1000)
-            ohlcv = self.exchange.fetch_ohlcv(
-                symbol, "1m", since=since, limit=1, params=self._get_ohlcv_params(symbol)
-            )
+            ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", since=since, limit=1, params=self._get_ohlcv_params(symbol))
             if ohlcv and len(ohlcv) > 0:
                 return float(ohlcv[0][4])
         except Exception as e:

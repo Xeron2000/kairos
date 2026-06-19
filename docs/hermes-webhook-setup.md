@@ -51,7 +51,7 @@ curl http://localhost:8644/health
 
 ```bash
 hermes webhook subscribe kairos-signals \
-  --prompt '收到交易信号:
+  --prompt '收到 Kairos futures anomaly:
 
 - 信号类型: {event}
 - 交易对: {symbol}
@@ -59,10 +59,17 @@ hermes webhook subscribe kairos-signals \
 - 触发条件: {condition}
 - 交易所: {exchange}
 
+完整 payload:
+{__raw__}
+
 请判断这个信号是否值得通知用户:
-1. 如果看起来是噪音、重复、已有处理方案——回复「静默」两个字
-2. 如果是重要的交易机会，请调用 kairos MCP 工具进行深度分析（box-detect, signal, cycle），然后润色成简洁中文提醒，包含：信号类型、关键数字、建议动作' \
+1. Webhook 异动只是候选提示，不是交易信号。
+2. 必须先调用 `evaluate_trade_opportunity(symbol)`；只有 `push_allowed == true` 才允许推送。
+3. Hermes 可以 veto，但不能把 `watch` / `prepare` / `no_trade` 提升成交易提醒。
+4. 非 `push_allowed`、噪音、重复、缺少入场/止损/目标/RR 的情况，只输出 `KAIROS_NO_SIGNAL`。
+5. 真正可交易时，再调用 cycle/sentiment/box/signal 做确认和解释，输出简洁中文 KISS 提醒。' \
   --description "Kairos 交易系统——实时异动信号" \
+  --skills kairos-harness \
   --deliver telegram \
   --deliver-chat-id "<your-chat-id>"
 ```
@@ -73,7 +80,7 @@ hermes webhook subscribe kairos-signals \
 |------|------|
 | `name` | 路由名，最终 URL 为 `/webhooks/<name>` |
 | `--prompt` | Agent prompt 模板，支持 `{event}`, `{symbol}`, `{price}` 等变量 |
-| `--events` | (可选) 限定事件类型，如 `price_velocity,volume_spike`。不指定则接受所有 |
+| `--events` | (可选) 限定事件类型，如 `price_velocity,volume_spike,open_interest_change,funding_rate_anomaly`。不指定则接受所有 |
 | `--description` | 简短描述，在 list 中展示 |
 | `--deliver` | 投递通道：`telegram`, `discord`, `slack`, `log` 等 |
 | `--deliver-chat-id` | 目标 Chat ID |

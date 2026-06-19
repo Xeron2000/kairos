@@ -10,6 +10,9 @@ from kairos.mcp_server import (
     check_pyramiding,
     detect_box_pattern,
     detect_signal,
+    get_coinglass_hot_coins,
+    get_coinglass_market_funding_average,
+    get_coinglass_symbol_context,
     get_market_cycle,
     scan_market,
     scan_symbols,
@@ -81,6 +84,39 @@ class TestMCPServer:
 
         assert result == expected
         mock_analyze.assert_called_once_with(symbol="BTCUSDT", exchange=None)
+
+    def test_get_coinglass_hot_coins_tool_wraps_client(self):
+        """CoinGlass hot coins tool exposes normalized client output."""
+        expected = {
+            "source": "spot",
+            "timeframe": "4h",
+            "overbought": [{"symbol": "SENT"}],
+            "oversold": [{"symbol": "SYN"}],
+        }
+        with patch("kairos.mcp_server.fetch_coinglass_hot_coins", return_value=expected) as mock_fetch:
+            result = get_coinglass_hot_coins(timeframe="4h", limit=2)
+
+        assert result["success"] is True
+        assert result["overbought"] == [{"symbol": "SENT"}]
+        mock_fetch.assert_called_once_with(timeframe="4h", rsi_high=70.0, rsi_low=30.0, limit=2, source="spot")
+
+    def test_get_coinglass_symbol_context_tool_degrades_on_client_error(self):
+        """CoinGlass upstream failures should not escape the MCP tool."""
+        with patch("kairos.mcp_server.fetch_coinglass_symbol_context", side_effect=RuntimeError("network down")):
+            result = get_coinglass_symbol_context("BTC/USDT")
+
+        assert result["success"] is False
+        assert result["symbol"] == "BTC/USDT"
+        assert "network down" in result["error"]
+
+    def test_get_coinglass_market_funding_average_tool_wraps_client(self):
+        """CoinGlass market funding tool exposes aggregate context."""
+        expected = {"source": "fundingRate/avg", "btc_funding_by_open_interest": 0.001}
+        with patch("kairos.mcp_server.fetch_coinglass_market_funding_average", return_value=expected):
+            result = get_coinglass_market_funding_average()
+
+        assert result["success"] is True
+        assert result["btc_funding_by_open_interest"] == 0.001
 
     def test_get_market_cycle(self):
         """Test get_market_cycle returns expected fields."""

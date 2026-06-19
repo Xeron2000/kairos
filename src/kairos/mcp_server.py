@@ -8,7 +8,9 @@ and live exchange data via ccxt REST API when available.
 
 import logging
 import sys
+from dataclasses import asdict
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -22,6 +24,24 @@ from mcp.server.fastmcp import FastMCP
 from kairos.analysis.box_pattern import BoxDetector
 from kairos.analysis.cycle import CycleDetector
 from kairos.analysis.support_resistance import SupportResistance
+from kairos.data.coinglass_client import (
+    get_coin_rsi as fetch_coinglass_coin_rsi,
+)
+from kairos.data.coinglass_client import (
+    get_funding_extremes as fetch_coinglass_funding_extremes,
+)
+from kairos.data.coinglass_client import (
+    get_hot_coins as fetch_coinglass_hot_coins,
+)
+from kairos.data.coinglass_client import (
+    get_market_funding_average as fetch_coinglass_market_funding_average,
+)
+from kairos.data.coinglass_client import (
+    get_rsi_heatmap as fetch_coinglass_rsi_heatmap,
+)
+from kairos.data.coinglass_client import (
+    get_symbol_context as fetch_coinglass_symbol_context,
+)
 from kairos.scanner import analyze_symbol_setup as run_analyze_symbol_setup
 from kairos.scanner import scan_market as run_scan_market
 from kairos.utils.blacklist import Blacklist
@@ -122,6 +142,27 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively convert numpy/dataclass values to JSON-native types."""
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "__dataclass_fields__"):
+        return _json_safe(asdict(value))
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    return value
 
 
 def _configure_exchange_client(exchange_client: Any) -> None:
@@ -289,6 +330,75 @@ def _market_inst_id(symbol: str, market: dict[str, Any]) -> str:
     return f"{base}-USDT-SWAP"
 
 
+def _trade_opportunity_decision(analysis: dict[str, Any]) -> dict[str, Any]:
+    """Convert scanner output into an explicit Hermes push/no-push decision."""
+    if not analysis.get("success"):
+        return {
+            "push_allowed": False,
+            "reason": "symbol analysis failed",
+        }
+
+    data = analysis.get("data") if isinstance(analysis.get("data"), dict) else {}
+    setup = data.get("setup") if isinstance(data.get("setup"), dict) else {}
+    action_state = setup.get("action_state")
+    if action_state != "trade_candidate":
+        return {
+            "push_allowed": False,
+            "reason": f"action_state is {action_state or 'missing'}, not trade_candidate",
+            "action_state": action_state,
+        }
+
+    risk = setup.get("risk") if isinstance(setup.get("risk"), dict) else {}
+    entry_zone = risk.get("entry_zone") if isinstance(risk.get("entry_zone"), list) else []
+    targets = risk.get("targets") if isinstance(risk.get("targets"), list) else []
+    structural_stop = risk.get("structural_stop")
+    risk_reward = _safe_float(risk.get("risk_reward"), 0.0)
+    required_rr = _safe_float(setup.get("required_risk_reward"), 0.0)
+    direction = setup.get("direction")
+
+    if direction not in {"long", "short"}:
+        return {
+            "push_allowed": False,
+            "reason": "trade_candidate missing direction",
+            "action_state": action_state,
+        }
+    if not entry_zone or structural_stop is None or not targets:
+        return {
+            "push_allowed": False,
+            "reason": "trade_candidate missing entry zone, stop, or targets",
+            "action_state": action_state,
+        }
+    if required_rr > 0 and risk_reward < required_rr:
+        return {
+            "push_allowed": False,
+            "reason": f"risk_reward {risk_reward:.2f} below required {required_rr:.2f}",
+            "action_state": action_state,
+        }
+
+    return {
+        "push_allowed": True,
+        "reason": "Kairos deterministic scanner returned trade_candidate",
+        "action_state": action_state,
+        "telegram": {
+            "symbol": setup.get("symbol") or analysis.get("symbol"),
+            "direction": str(direction).upper(),
+            "setup_type": setup.get("setup_type"),
+            "setup_score": setup.get("setup_score"),
+            "threshold": setup.get("threshold"),
+            "risk_reward": risk_reward,
+            "required_risk_reward": required_rr,
+            "entry_zone": entry_zone,
+            "structural_stop": structural_stop,
+            "targets": targets[:3],
+            "max_position_pct": risk.get("max_position_pct"),
+            "max_leverage": risk.get("max_leverage"),
+            "invalidation": risk.get("invalidation"),
+            "reasons": setup.get("reasons", [])[:3],
+            "warnings": setup.get("warnings", [])[:3],
+        },
+    }
+
+
 # ── State ──────────────────────────────────────────────────────────────────
 
 
@@ -318,13 +428,159 @@ state = KairosState()
 @mcp.tool()
 def scan_market(exchange: str = "") -> Dict[str, Any]:
     """Run scanner-first market discovery and deterministic setup analysis."""
-    return run_scan_market(exchange=exchange or None)
+    return _json_safe(run_scan_market(exchange=exchange or None))
 
 
 @mcp.tool()
 def analyze_symbol_setup(symbol: str, exchange: str = "") -> Dict[str, Any]:
     """Analyze one symbol with the scanner setup logic."""
-    return run_analyze_symbol_setup(symbol=symbol, exchange=exchange or None)
+    return _json_safe(run_analyze_symbol_setup(symbol=symbol, exchange=exchange or None))
+
+
+@mcp.tool()
+def evaluate_trade_opportunity(symbol: str, exchange: str = "") -> Dict[str, Any]:
+    """Return an explicit push/no-push decision for Hermes Telegram alerts.
+
+    This wraps the scanner-first `analyze_symbol_setup` contract so Hermes does
+    not need to infer trade eligibility from lower-level analysis outputs.
+    """
+    try:
+        analysis = run_analyze_symbol_setup(symbol=symbol, exchange=exchange or None)
+        decision = _trade_opportunity_decision(analysis if isinstance(analysis, dict) else {})
+        return _json_safe(
+            {
+                "success": bool(analysis.get("success")) if isinstance(analysis, dict) else False,
+                "timestamp": datetime.now().isoformat(),
+                "symbol": analysis.get("symbol") if isinstance(analysis, dict) else symbol,
+                **decision,
+                "analysis": analysis,
+            }
+        )
+    except Exception as e:
+        logger.error("Error evaluating trade opportunity for %s: %s", symbol, e)
+        return {"success": False, "push_allowed": False, "reason": str(e), "error": str(e)}
+
+
+@mcp.tool()
+def get_coinglass_rsi_heatmap(source: str = "spot", limit: int = 100) -> Dict[str, Any]:
+    """Fetch normalized CoinGlass RSI heatmap context."""
+    try:
+        data = fetch_coinglass_rsi_heatmap(source=source, limit=max(1, min(int(limit), 500)))
+        return _json_safe(
+            {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                **data,
+            }
+        )
+    except Exception as e:
+        return _coinglass_failure(str(e))
+
+
+@mcp.tool()
+def get_coinglass_hot_coins(
+    timeframe: str = "4h",
+    rsi_high: float = 70.0,
+    rsi_low: float = 30.0,
+    limit: int = 20,
+    source: str = "spot",
+) -> Dict[str, Any]:
+    """Find CoinGlass overbought/oversold coins by RSI threshold."""
+    try:
+        data = fetch_coinglass_hot_coins(
+            timeframe=timeframe,
+            rsi_high=rsi_high,
+            rsi_low=rsi_low,
+            limit=max(1, min(int(limit), 500)),
+            source=source,
+        )
+        return _json_safe(
+            {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                **data,
+            }
+        )
+    except Exception as e:
+        return _coinglass_failure(str(e))
+
+
+@mcp.tool()
+def get_coinglass_coin_rsi(symbol: str, source: str = "index") -> Dict[str, Any]:
+    """Fetch CoinGlass RSI context for one symbol."""
+    try:
+        data = fetch_coinglass_coin_rsi(symbol, source=source)
+        return _json_safe(
+            {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                **data,
+            }
+        )
+    except Exception as e:
+        return _coinglass_failure(str(e), symbol=symbol)
+
+
+@mcp.tool()
+def get_coinglass_funding_extremes(limit: int = 20) -> Dict[str, Any]:
+    """Fetch CoinGlass extreme funding-rate ranks."""
+    try:
+        data = fetch_coinglass_funding_extremes(limit=max(1, min(int(limit), 500)))
+        return _json_safe(
+            {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                **data,
+            }
+        )
+    except Exception as e:
+        return _coinglass_failure(str(e))
+
+
+@mcp.tool()
+def get_coinglass_market_funding_average() -> Dict[str, Any]:
+    """Fetch CoinGlass BTC/ETH aggregate funding averages."""
+    try:
+        data = fetch_coinglass_market_funding_average()
+        return _json_safe(
+            {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                **data,
+            }
+        )
+    except Exception as e:
+        return _coinglass_failure(str(e))
+
+
+@mcp.tool()
+def get_coinglass_symbol_context(symbol: str) -> Dict[str, Any]:
+    """Fetch optional CoinGlass RSI/funding/OI/flow/liquidation context for one symbol."""
+    try:
+        data = fetch_coinglass_symbol_context(symbol)
+        return _json_safe(
+            {
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                **data,
+            }
+        )
+    except Exception as e:
+        return _coinglass_failure(str(e), symbol=symbol)
+
+
+def _coinglass_failure(error: str, symbol: str | None = None) -> Dict[str, Any]:
+    """Return a non-fatal CoinGlass failure payload for MCP tools."""
+    payload: Dict[str, Any] = {
+        "success": False,
+        "timestamp": datetime.now().isoformat(),
+        "source": "coinglass",
+        "error": error,
+        "warnings": ["CoinGlass context unavailable; do not treat this as a trade veto by itself."],
+    }
+    if symbol:
+        payload["symbol"] = symbol
+    return payload
 
 
 @mcp.tool()
@@ -359,7 +615,7 @@ def get_market_cycle() -> Dict[str, Any]:
         phase = result.phase.value
         is_spring = phase == "spring"
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "cycle": {
@@ -388,7 +644,7 @@ def get_market_cycle() -> Dict[str, Any]:
                 "耐心等待下一个春天",
                 "不要妄想在震荡行情中多空双吃",
             ],
-        }
+        })
     except Exception as e:
         logger.error(f"Error getting market cycle: {e}")
         return {"success": False, "error": str(e)}
@@ -435,7 +691,7 @@ def detect_box_pattern(
 
         box = boxes[0]  # Most recent/active box
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
@@ -466,7 +722,7 @@ def detect_box_pattern(
                 "stop_loss_level": box.low * 0.99,
                 "invalidation": "跌破箱底则箱体失效",
             },
-        }
+        })
     except Exception as e:
         logger.error(f"Error detecting box pattern for {symbol}: {e}")
         return {"success": False, "error": str(e)}
@@ -574,7 +830,7 @@ def scan_symbols(
         candidates.sort(key=lambda x: x["volume_24h"], reverse=True)
         candidates = candidates[:20]
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "exchange": exchange,
@@ -593,7 +849,7 @@ def scan_symbols(
                 "min_age_supported": min_age_supported,
                 "min_age_unsupported": min_age_unsupported,
             },
-        }
+        })
     except Exception as e:
         logger.error(f"Error scanning symbols: {e}")
         return {"success": False, "error": str(e)}
@@ -691,7 +947,7 @@ def detect_signal(
 
         funding = _funding_rate(symbol) or 0
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
@@ -711,7 +967,7 @@ def detect_signal(
                 "leverage": "3-5倍",
                 "notes": "严格止损" if box else "等待箱体形成后再判断",
             },
-        }
+        })
     except Exception as e:
         logger.error(f"Error detecting signal for {symbol}: {e}")
         return {"success": False, "error": str(e)}
@@ -758,7 +1014,7 @@ def check_pyramiding(symbol: str) -> Dict[str, Any]:
 
         all_met = trend_up and has_box and box_ready
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
@@ -778,7 +1034,7 @@ def check_pyramiding(symbol: str) -> Dict[str, Any]:
             if all_met
             else {"ready": False, "reason": "趋势/结构不满足加仓条件"},
             "recommendation": "可以加仓" if all_met else "等待更好的加仓时机",
-        }
+        })
     except Exception as e:
         logger.error(f"Error checking pyramiding for {symbol}: {e}")
         return {"success": False, "error": str(e)}
@@ -816,7 +1072,7 @@ def check_exit_signals(symbol: str) -> Dict[str, Any]:
 
         any_signal = reversal or failed_breakout or trend_weakening
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
@@ -832,7 +1088,7 @@ def check_exit_signals(symbol: str) -> Dict[str, Any]:
                 "reason": "出现出场信号" if any_signal else "无出场信号",
                 "stop_loss": "上移至当前位置" if any_signal else "保持原止损",
             },
-        }
+        })
     except Exception as e:
         logger.error(f"Error checking exit signals for {symbol}: {e}")
         return {"success": False, "error": str(e)}
@@ -876,7 +1132,7 @@ def get_market_sentiment() -> Dict[str, Any]:
 
         funding = _funding_rate("BTC/USDT") or 0.015
 
-        return {
+        return _json_safe({
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "sentiment": {
@@ -897,7 +1153,7 @@ def get_market_sentiment() -> Dict[str, Any]:
                 "position_strategy": "聚焦龙头" if sentiment == "bullish" else "空仓等待",
                 "risk_level": "中等" if sentiment != "bearish" else "高",
             },
-        }
+        })
     except Exception as e:
         logger.error(f"Error getting market sentiment: {e}")
         return {"success": False, "error": str(e)}

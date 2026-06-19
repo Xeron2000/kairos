@@ -1369,6 +1369,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "ccxt" },
+    { name = "cryptography" },
     { name = "expiringdict" },
     { name = "httpx" },
     { name = "mcp" },
@@ -1417,6 +1418,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.0.0" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.5" },
     { name = "ccxt", specifier = ">=4.1.80" },
+    { name = "cryptography", specifier = ">=42.0.0" },
     { name = "expiringdict", specifier = ">=1.2.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.0.0" },

@@ -1,5 +1,7 @@
 """Regression tests for MCP server P0/P1 behavior and coverage."""
 
+import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ from kairos.mcp_server import (
     _fetch_ohlcv,
     _funding_rate,
     _get_exchange,
+    _json_safe,
     _market_age_days,
     _normalize_symbol,
     _open_interest,
@@ -22,6 +25,7 @@ from kairos.mcp_server import (
     check_pyramiding,
     detect_box_pattern,
     detect_signal,
+    evaluate_trade_opportunity,
     get_market_cycle,
     get_market_sentiment,
     list_blacklist,
@@ -50,6 +54,13 @@ class DummyBox:
         self.convergence_pct = 0.82
         self.volume_declining = True
         self.is_ready = is_ready
+
+
+@dataclass
+class JsonSafeSample:
+    """Dataclass payload containing numpy scalar values."""
+
+    is_ready: object
 
 
 def make_ohlcv(price: float = 100.0, n: int = 60, trend: float = 0.0, bearish_last: bool = False) -> dict:
@@ -91,6 +102,21 @@ def test_helper_normalize_symbol_and_safe_float():
     assert _safe_float("12.5") == 12.5
     assert _safe_float(None, 7.0) == 7.0
     assert _safe_float("bad", 3.0) == 3.0
+
+
+def test_json_safe_converts_numpy_values_for_mcp_serialization():
+    payload = {
+        "flag": np.bool_(True),
+        "nested": [np.bool_(False), np.array([np.int64(1), np.float64(2.5)])],
+        "box": JsonSafeSample(is_ready=np.bool_(True)),
+    }
+
+    result = _json_safe(payload)
+
+    assert result["flag"] is True
+    assert result["nested"] == [False, [1, 2.5]]
+    assert result["box"]["is_ready"] is True
+    json.dumps(result)
 
 
 def test_get_exchange_returns_none_on_factory_error():
@@ -449,6 +475,61 @@ def test_scan_market_and_analyze_symbol_setup_preserve_exchange_argument():
     with patch("kairos.mcp_server.run_analyze_symbol_setup", return_value=expected) as analyze:
         assert analyze_symbol_setup("BTC/USDT", exchange="binance") == expected
     analyze.assert_called_once_with(symbol="BTC/USDT", exchange="binance")
+
+
+def test_evaluate_trade_opportunity_blocks_non_trade_candidates():
+    analysis = {
+        "success": True,
+        "symbol": "BTC/USDT:USDT",
+        "data": {"setup": {"action_state": "prepare", "risk": {}}},
+    }
+    with patch("kairos.mcp_server.run_analyze_symbol_setup", return_value=analysis) as analyze:
+        result = evaluate_trade_opportunity("BTC/USDT", exchange="okx")
+
+    assert result["success"] is True
+    assert result["push_allowed"] is False
+    assert result["action_state"] == "prepare"
+    assert "not trade_candidate" in result["reason"]
+    analyze.assert_called_once_with(symbol="BTC/USDT", exchange="okx")
+
+
+def test_evaluate_trade_opportunity_allows_valid_trade_candidate():
+    analysis = {
+        "success": True,
+        "symbol": "ETH/USDT:USDT",
+        "data": {
+            "setup": {
+                "symbol": "ETH/USDT:USDT",
+                "action_state": "trade_candidate",
+                "direction": "long",
+                "setup_type": "box_breakout",
+                "setup_score": np.float64(6.2),
+                "threshold": np.float64(5.5),
+                "required_risk_reward": np.float64(2.0),
+                "risk": {
+                    "entry_zone": [np.float64(100.0), np.float64(100.3)],
+                    "structural_stop": np.float64(96.0),
+                    "targets": [np.float64(108.0), np.float64(116.0)],
+                    "risk_reward": np.float64(3.1),
+                    "max_position_pct": np.float64(33.0),
+                    "max_leverage": np.float64(10.0),
+                    "invalidation": "below structure low",
+                },
+                "reasons": ["4h structure is usable", "15m trigger is active"],
+                "warnings": [],
+            }
+        },
+    }
+    with patch("kairos.mcp_server.run_analyze_symbol_setup", return_value=analysis):
+        result = evaluate_trade_opportunity("ETH/USDT")
+
+    assert result["push_allowed"] is True
+    assert result["reason"] == "Kairos deterministic scanner returned trade_candidate"
+    assert result["telegram"]["symbol"] == "ETH/USDT:USDT"
+    assert result["telegram"]["direction"] == "LONG"
+    assert result["telegram"]["entry_zone"] == [100.0, 100.3]
+    assert result["telegram"]["targets"] == [108.0, 116.0]
+    json.dumps(result, ensure_ascii=False)
 
 
 def test_main_bootstrap_success_config_failure_and_keyboard_interrupt():

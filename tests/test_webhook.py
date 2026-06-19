@@ -56,6 +56,7 @@ class TestSignalEvent:
         payload = ev.to_payload()
         expected_keys = {
             "event",
+            "event_type",
             "event_id",
             "timestamp",
             "symbol",
@@ -67,6 +68,7 @@ class TestSignalEvent:
         }
         assert set(payload.keys()) == expected_keys
         assert payload["event"] == "price_alert"
+        assert payload["event_type"] == "price_alert"
         assert payload["symbol"] == "ETH/USDT"
         assert payload["price"] == 3400.0
         assert payload["condition"] == "breakout_below"
@@ -430,6 +432,7 @@ class TestWebhookClientSend:
         headers = call_args[1]["headers"]
         assert headers["Content-Type"] == "application/json"
         assert "X-Webhook-Signature" in headers
+        assert headers["X-Request-ID"] == event.event_id
         assert headers["User-Agent"] == "Kairos-Webhook/1.0"
 
     @pytest.mark.asyncio

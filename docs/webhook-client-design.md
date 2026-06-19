@@ -97,7 +97,7 @@ import uuid
 from datetime import datetime, timezone
 
 def build_signal_payload(
-    event_type: str,      # "price_velocity" | "volume_spike"
+    event_type: str,      # "price_velocity" | "volume_spike" | "open_interest_change" | "funding_rate_anomaly"
     symbol: str,
     price: float,
     condition: str,

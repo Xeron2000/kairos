@@ -50,6 +50,7 @@ uv run kairos-backtest --help   # Backtest utilities
 - **Language**: Default to Chinese for user communication
 - **Evidence**: Verify high-risk claims before citing
 - **Efficiency**: Batch operations, avoid redundant reads
+- **Commit messages**: Conventional Commits — `type(scope): description`, e.g. `feat(scanner): add volume confirmation gate`. Types: feat/fix/refactor/docs/test/chore. Scope is the module name (scanner, base, blacklist, etc). Keep under 72 chars. If you need more detail, use the body (blank line after subject).
 
 ## Priority
 
